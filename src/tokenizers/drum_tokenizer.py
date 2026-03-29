@@ -6,11 +6,16 @@ import numpy as np
 import miditoolkit
 from collections import defaultdict
 from typing import List, Dict, Tuple, Optional
+from src.utils.tokenization_policy import (
+    POSITIONS_PER_BEAT as SHARED_POSITIONS_PER_BEAT,
+    classify_velocity_level,
+    quantize_position_in_beat,
+)
 
 # 定数定義
 DEFAULT_BEAT_RESOL = 480
 DEFAULT_BAR_RESOL = 480 * 4
-POSITIONS_PER_BEAT = 24  # 1拍を24分割
+POSITIONS_PER_BEAT = SHARED_POSITIONS_PER_BEAT  # 1拍を24分割
 
 # ドラム譜用のノートマッピング (カスタムマッピング)
 DRUM_NOTE_MAP = {
@@ -156,12 +161,7 @@ class DrumTokenizer:
 
     def _velocity_to_level(self, velocity: int) -> str:
         """ベロシティをGhost/Normal/Accentに変換"""
-        if velocity < 40:
-            return 'Ghost'
-        elif velocity < 100:
-            return 'Normal'
-        else:
-            return 'Accent'
+        return classify_velocity_level(int(velocity))
 
     def _detect_flam(self, notes: List[miditoolkit.Note], window_ticks: int = 30) -> Dict[int, List[int]]:
         """
@@ -381,7 +381,7 @@ class DrumTokenizer:
                 if bar_start_tick <= note.start < bar_end_tick:
                     tick_in_bar = note.start - bar_start_tick
                     beat = tick_in_bar // DEFAULT_BEAT_RESOL
-                    pos_in_beat = (tick_in_bar % DEFAULT_BEAT_RESOL) * POSITIONS_PER_BEAT // DEFAULT_BEAT_RESOL
+                    pos_in_beat = quantize_position_in_beat(tick_in_bar, DEFAULT_BEAT_RESOL)
 
                     if note.pitch not in DRUM_NOTE_MAP:
                         continue
@@ -419,7 +419,7 @@ class DrumTokenizer:
                     if bar_start_tick <= choke_tick < bar_end_tick:
                         tick_in_bar = choke_tick - bar_start_tick
                         beat = tick_in_bar // DEFAULT_BEAT_RESOL
-                        pos_in_beat = (tick_in_bar % DEFAULT_BEAT_RESOL) * POSITIONS_PER_BEAT // DEFAULT_BEAT_RESOL
+                        pos_in_beat = quantize_position_in_beat(tick_in_bar, DEFAULT_BEAT_RESOL)
 
                         drum_type = DRUM_NOTE_MAP[note.pitch][0]
                         choke_token = f'{drum_type}_CHOKE'
@@ -472,13 +472,26 @@ class DrumTokenizer:
         """語彙を保存"""
         import pickle
         with open(vocab_path, 'wb') as f:
-            pickle.dump((self.token2idx, self.idx2token), f)
+            pickle.dump(
+                {
+                    'tokenization_method': 'standard',
+                    'schema_version': 1,
+                    'token2idx': self.token2idx,
+                    'idx2token': self.idx2token,
+                },
+                f,
+            )
 
     def load_vocab(self, vocab_path: str):
         """語彙を読み込み"""
         import pickle
         with open(vocab_path, 'rb') as f:
-            self.token2idx, self.idx2token = pickle.load(f)
+            vocab_payload = pickle.load(f)
+            if isinstance(vocab_payload, dict):
+                self.token2idx = vocab_payload['token2idx']
+                self.idx2token = vocab_payload['idx2token']
+            else:
+                self.token2idx, self.idx2token = vocab_payload
             self.vocab = list(self.token2idx.keys())
             self.vocab_size = len(self.vocab)
 

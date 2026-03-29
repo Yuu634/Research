@@ -76,24 +76,61 @@ class DrumTransformerDataset(Dataset):
         if isinstance(vocab_payload, dict) and vocab_payload.get('tokenization_method') == 'cp_limb_v1':
             self.tokenization_method = 'cp_limb_v1'
 
-            self.event_type2idx = vocab_payload['event_type2idx']
-            self.idx2event_type = vocab_payload['idx2event_type']
+            self.event_type2idx = vocab_payload.get(
+                'event_type2idx',
+                {'STRUCT': 0, 'CP': 1, '<PAD_EVENT>': 2}
+            )
+            self.idx2event_type = vocab_payload.get(
+                'idx2event_type',
+                {v: k for k, v in self.event_type2idx.items()}
+            )
 
-            self.struct_token2idx = vocab_payload['struct_token2idx']
-            self.idx2struct_token = vocab_payload['idx2struct_token']
+            self.type_token2idx = vocab_payload.get('type_token2idx')
+            self.idx2type_token = vocab_payload.get('idx2type_token')
+
+            if self.type_token2idx is None:
+                self.type_token2idx = vocab_payload['struct_token2idx']
+                self.idx2type_token = vocab_payload['idx2struct_token']
+
+            if '<NOTE>' not in self.type_token2idx:
+                self.type_token2idx = dict(self.type_token2idx)
+                note_id = max(self.type_token2idx.values()) + 1
+                self.type_token2idx['<NOTE>'] = note_id
+                self.idx2type_token = dict(self.idx2type_token)
+                self.idx2type_token[note_id] = '<NOTE>'
+
+            # backward compatibility aliases
+            self.struct_token2idx = self.type_token2idx
+            self.idx2struct_token = self.idx2type_token
+
             self.limb_token2idx = vocab_payload['limb_token2idx']
             self.idx2limb_token = vocab_payload['idx2limb_token']
 
             self.pos_pad_value = vocab_payload.get('pos_pad_value', 24)
 
-            self.bar_token = self.struct_token2idx['<BAR>']
-            self.eos_token = self.struct_token2idx['<EOS>']
-            self.pad_token = self.struct_token2idx['<PAD>']
+            self.cp_struct_event_idx = self.event_type2idx['STRUCT']
+            self.cp_note_event_idx = self.event_type2idx['CP']
+            self.cp_event_pad_idx = self.event_type2idx['<PAD_EVENT>']
 
-            # 既存呼び出しとの互換のため、構造語彙サイズをvocab_sizeとして公開
-            self.vocab_size = len(self.struct_token2idx)
+            self.type_pad_idx = self.type_token2idx['<PAD>']
+            self.type_note_idx = self.type_token2idx['<NOTE>']
+
+            self.bar_token = self.type_token2idx['<BAR>']
+            self.eos_token = self.type_token2idx['<EOS>']
+            self.pad_token = self.type_pad_idx
+
+            # 既存呼び出しとの互換のため、type語彙サイズをvocab_sizeとして公開
+            self.vocab_size = len(self.type_token2idx)
         else:
-            token2idx, idx2token = vocab_payload
+            if isinstance(vocab_payload, dict):
+                self.tokenization_method = vocab_payload.get(
+                    'tokenization_method',
+                    self.tokenization_method,
+                )
+                token2idx = vocab_payload['token2idx']
+                idx2token = vocab_payload['idx2token']
+            else:
+                token2idx, idx2token = vocab_payload
             self.token2idx = token2idx
             self.idx2token = idx2token
 
@@ -105,8 +142,43 @@ class DrumTransformerDataset(Dataset):
 
     def _piece_len(self, piece_evs):
         if isinstance(piece_evs, dict):
-            return len(piece_evs['event_type'])
+            if 'cp_type' in piece_evs:
+                return len(piece_evs['cp_type'])
+            if 'event_type' in piece_evs:
+                return len(piece_evs['event_type'])
+            first_key = next(iter(piece_evs.keys()))
+            return len(piece_evs[first_key])
         return len(piece_evs)
+
+    def _legacy_cp_to_type_seq(self, cp_tokens):
+        cp_type_seq = []
+        for ev_type, struct_id in zip(cp_tokens['event_type'], cp_tokens['struct_token']):
+            ev_type = int(ev_type)
+            if ev_type == self.cp_note_event_idx:
+                cp_type_seq.append(self.type_note_idx)
+            elif ev_type == self.cp_event_pad_idx:
+                cp_type_seq.append(self.type_pad_idx)
+            else:
+                cp_type_seq.append(int(struct_id))
+        return cp_type_seq
+
+    def _cp_type_to_aux_sequences(self, cp_type_seq):
+        event_seq = []
+        struct_seq = []
+
+        for cp_type in cp_type_seq:
+            cp_type = int(cp_type)
+            if cp_type == self.type_pad_idx:
+                event_seq.append(self.cp_event_pad_idx)
+                struct_seq.append(self.type_pad_idx)
+            elif cp_type == self.type_note_idx:
+                event_seq.append(self.cp_note_event_idx)
+                struct_seq.append(self.type_pad_idx)
+            else:
+                event_seq.append(self.cp_struct_event_idx)
+                struct_seq.append(cp_type)
+
+        return event_seq, struct_seq
 
     def _slice_piece_evs(self, piece_evs, st, ed):
         if isinstance(piece_evs, dict):
@@ -281,12 +353,15 @@ class DrumTransformerDataset(Dataset):
         # =========================================
 
         if self.tokenization_method == 'cp_limb_v1':
-            seq_len = len(bar_tokens['event_type'])
+            cp_type_seq = bar_tokens.get('cp_type')
+            if cp_type_seq is None:
+                cp_type_seq = self._legacy_cp_to_type_seq(bar_tokens)
+
+            seq_len = len(cp_type_seq)
             bar_pos = bar_pos.tolist() + [seq_len]
 
-            struct_seq = bar_tokens['struct_token']
             enc_inp, enc_padding_mask, enc_lens = self.get_encoder_input_data(
-                np.array(bar_pos), struct_seq
+                np.array(bar_pos), cp_type_seq
             )
 
             length = seq_len
@@ -301,12 +376,17 @@ class DrumTransformerDataset(Dataset):
                 inp = np.array(inp_full[:-1], dtype=int)
                 return inp[:self.model_dec_seqlen], tgt[:self.model_dec_seqlen]
 
+            type_inp, type_tgt = pad_and_shift(
+                cp_type_seq, self.type_pad_idx
+            )
+            event_seq, struct_seq = self._cp_type_to_aux_sequences(cp_type_seq)
             event_inp, event_tgt = pad_and_shift(
-                bar_tokens['event_type'], self.event_type2idx['<PAD_EVENT>']
+                event_seq, self.cp_event_pad_idx
             )
             struct_inp, struct_tgt = pad_and_shift(
-                bar_tokens['struct_token'], self.struct_token2idx['<PAD>']
+                struct_seq, self.type_pad_idx
             )
+
             pos_inp, pos_tgt = pad_and_shift(
                 bar_tokens['cp_pos'], self.pos_pad_value
             )
@@ -323,7 +403,7 @@ class DrumTransformerDataset(Dataset):
                 bar_tokens['cp_left_foot'], self.limb_token2idx['<PAD>']
             )
 
-            cp_event_id = self.event_type2idx['CP']
+            cp_event_id = self.cp_note_event_idx
             cp_mask = (event_inp == cp_event_id).astype(np.int32)
 
             result = {
@@ -340,6 +420,8 @@ class DrumTransformerDataset(Dataset):
                 'enc_length': enc_lens,
                 'enc_n_bars': enc_n_bars,
                 # CP専用系列
+                'cp_type_input': type_inp,
+                'cp_type_target': type_tgt,
                 'cp_event_type_input': event_inp,
                 'cp_event_type_target': event_tgt,
                 'cp_struct_input': struct_inp,

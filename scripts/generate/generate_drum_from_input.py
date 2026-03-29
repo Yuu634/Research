@@ -41,6 +41,11 @@ from src.data.drum_difficulty_calculator import (
 )
 from src.utils.utils import numpy_to_tensor, tensor_to_numpy
 from src.utils.drum_to_midi import tokens_to_midi
+from src.utils.tokenization_mode import (
+    ensure_runtime_mode_compatibility,
+    resolve_artifact_tokenization_method,
+    validate_tokenization_method,
+)
 
 
 
@@ -529,7 +534,10 @@ Example:
     config = yaml.load(open(config_path, 'r'), Loader=yaml.FullLoader)
     
     # トークン設計手法を取得
-    tokenization_method = config['data'].get('tokenization_method', 'standard')
+    tokenization_method = validate_tokenization_method(
+        config['data'].get('tokenization_method', 'standard'),
+        context='data.tokenization_method',
+    )
     print(f'[info] Tokenization method: {tokenization_method}')
     
     # CP形式は未対応
@@ -544,6 +552,23 @@ Example:
     vocab_path = Path(config['data']['vocab_path'])
     if not vocab_path.exists():
         print(f'[ERROR] Vocabulary file not found: {vocab_path}')
+        sys.exit(1)
+
+    data_dir = config['data'].get('data_dir')
+    try:
+        ensure_runtime_mode_compatibility(
+            requested_mode=tokenization_method,
+            vocab_path=str(vocab_path),
+            data_dir=data_dir,
+        )
+        artifact_mode, artifact_mode_source = resolve_artifact_tokenization_method(
+            str(vocab_path),
+            data_dir,
+        )
+        if artifact_mode is not None:
+            print(f'[info] Artifact tokenization mode: {artifact_mode} ({artifact_mode_source})')
+    except ValueError as e:
+        print(f'[ERROR] {e}')
         sys.exit(1)
     
     print(f'[info] Loading vocabulary from {vocab_path}')

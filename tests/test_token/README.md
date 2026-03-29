@@ -34,7 +34,7 @@ test_token/
 
 ```bash
 cd /mnt/kiso-qnap5/obara/MuseMorphose
-python3 test_token/run_all_tests.py
+python3 tests/test_token/run_all_tests.py
 ```
 
 これにより以下が自動的に実行されます:
@@ -47,7 +47,7 @@ python3 test_token/run_all_tests.py
 #### ステップ1: サンプルMIDIファイルを生成
 
 ```bash
-python3 test_token/sample_midi_generator.py --output_dir test_token/sample_midis
+python3 tests/test_token/sample_midi_generator.py --output_dir tests/test_token/sample_midis
 ```
 
 生成されるファイル:
@@ -57,23 +57,23 @@ python3 test_token/sample_midi_generator.py --output_dir test_token/sample_midis
 #### ステップ2: 往復変換テストを実行
 
 ```bash
-python3 test_token/test_round_trip.py --midi_dir test_token/sample_midis --output_dir test_token/output/remi --tokenization_method remi
+python3 tests/test_token/test_round_trip.py --midi_dir tests/test_token/sample_midis --output_dir tests/test_token/output/remi --tokenization_method remi
 
-python3 test_token/test_round_trip.py --midi_dir test_token/sample_midis --output_dir test_token/output/standard --tokenization_method standard
+python3 tests/test_token/test_round_trip.py --midi_dir tests/test_token/sample_midis --output_dir tests/test_token/output/standard --tokenization_method standard
 
-python3 test_token/test_round_trip.py --midi_dir test_token/sample_midis --output_dir test_token/output/cp --tokenization_method cp_limb_v1
+python3 tests/test_token/test_round_trip.py --midi_dir tests/test_token/sample_midis --output_dir tests/test_token/output/cp --tokenization_method cp_limb_v1
 ```
 
 または単一のファイルをテスト:
 
 ```bash
-python3 test_token/test_round_trip.py --single_file test_token/sample_midis/simple_beat.mid --output_dir test_token/output --tokenization_method remi
+python3 tests/test_token/test_round_trip.py --single_file tests/test_token/sample_midis/simple_beat.mid --output_dir tests/test_token/output --tokenization_method remi
 ```
 
 3方式を一括で実行:
 
 ```bash
-python3 test_token/test_round_trip.py --midi_dir test_token/sample_midis --output_dir test_token/output --all_methods
+python3 tests/test_token/test_round_trip.py --midi_dir tests/test_token/sample_midis --output_dir tests/test_token/output --all_methods
 ```
 
 このテストは以下を検証します:
@@ -85,7 +85,7 @@ python3 test_token/test_round_trip.py --midi_dir test_token/sample_midis --outpu
 #### ステップ3: トークン内容を検証
 
 ```bash
-python3 test_token/test_token_verification.py --pkl_path test_token/output/simple_beat_tokens.pkl --midi_path test_token/sample_midis/simple_beat.mid
+python3 tests/test_token/test_token_verification.py --pkl_path tests/test_token/output/simple_beat_tokens.pkl --midi_path tests/test_token/sample_midis/simple_beat.mid
 ```
 
 このテストは以下を検証します:
@@ -179,7 +179,7 @@ pip install miditoolkit numpy
 まずサンプルMIDIファイルを生成してください:
 
 ```bash
-python3 test_token/sample_midi_generator.py
+python3 tests/test_token/sample_midi_generator.py
 ```
 
 ### トークン不一致
@@ -193,10 +193,10 @@ python3 test_token/sample_midi_generator.py
 
 ```bash
 # 往復変換テスト
-python3 test_token/test_round_trip.py --single_file /path/to/your/drum.mid --output_dir test_token/output
+python3 tests/test_token/test_round_trip.py --single_file /path/to/your/drum.mid --output_dir tests/test_token/output
 
 # トークン内容検証
-python3 test_token/test_token_verification.py --pkl_path test_token/output/drum_tokens.pkl --midi_path /path/to/your/drum.mid
+python3 tests/test_token/test_token_verification.py --pkl_path tests/test_token/output/drum_tokens.pkl --midi_path /path/to/your/drum.mid
 ```
 
 **注意**: テストするMIDIファイルには以下の要件があります:

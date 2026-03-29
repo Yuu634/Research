@@ -16,16 +16,16 @@ MIDI → トークン → MIDIの往復変換テスト
 """
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import pickle
 import numpy as np
 import miditoolkit
 from typing import List, Dict, Tuple, Optional
-from drum_tokenizer import DrumTokenizer, DRUM_NOTE_MAP
-from drum_cp_tokenizer import DrumCPTokenizer
-from prepare_drum_dataset import RemiDrumTokenizer
-from drum_to_midi import DrumToken2MIDI, cp_data_to_midi
+from src.tokenizers.drum_tokenizer import DrumTokenizer, DRUM_NOTE_MAP
+from src.tokenizers.drum_cp_tokenizer import DrumCPTokenizer
+from scripts.preprocess.prepare_drum_dataset import RemiDrumTokenizer
+from src.utils.drum_to_midi import DrumToken2MIDI, cp_data_to_midi
 
 
 DEFAULT_BEAT_RESOL = 480
@@ -601,7 +601,7 @@ def test_round_trip(
 
         if tokenization_method == 'cp_limb_v1':
             cp_data, bar_positions = tokenizer.midi_to_cp_data(midi_path)
-            n_events = len(cp_data['event_type'])
+            n_events = len(cp_data['cp_type'])
             print(f"  ✓ CPイベント列を生成")
             print(f"  イベント数: {n_events}")
         else:
@@ -612,7 +612,7 @@ def test_round_trip(
 
         print(f"  小節数: {len(bar_positions)}")
         result['steps']['midi_to_tokens'] = True
-        result['token_count'] = len(cp_data['event_type']) if cp_data is not None else len(tokens)
+        result['token_count'] = len(cp_data['cp_type']) if cp_data is not None else len(tokens)
         result['bar_count'] = len(bar_positions)
 
         if tokenization_method != 'cp_limb_v1':
@@ -629,6 +629,7 @@ def test_round_trip(
                     'tokenization_method': tokenization_method,
                     'cp_data': cp_data,
                     'bar_positions': bar_positions,
+                    'idx2type_token': tokenizer.idx2type_token,
                     'idx2struct_token': tokenizer.idx2struct_token,
                     'idx2limb_token': tokenizer.idx2limb_token,
                     'first_note_beat': first_note_beat,
@@ -657,7 +658,7 @@ def test_round_trip(
         if tokenization_method == 'cp_limb_v1':
             loaded_cp_data = loaded_data['cp_data']
             print(f"  ✓ CPイベント列を読み込み")
-            print(f"  読み込んだイベント数: {len(loaded_cp_data['event_type'])}")
+            print(f"  読み込んだイベント数: {len(loaded_cp_data['cp_type'])}")
 
             if loaded_cp_data == cp_data:
                 print(f"  ✓ 保存/読み込みの整合性確認OK")
@@ -685,9 +686,10 @@ def test_round_trip(
         reconstructed_midi_path = os.path.join(output_dir, f"{base_name}_reconstructed.mid")
 
         if tokenization_method == 'cp_limb_v1':
+            idx2type_token = loaded_data.get('idx2type_token', loaded_data['idx2struct_token'])
             midi_obj = cp_data_to_midi(
                 loaded_cp_data,
-                loaded_data['idx2struct_token'],
+                idx2type_token,
                 loaded_data['idx2limb_token'],
                 reconstructed_midi_path,
                 bpm=120,

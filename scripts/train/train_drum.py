@@ -8,6 +8,11 @@ import time
 from src.models.musemorphose import MuseMorphose
 from src.data.drum_dataloader import DrumTransformerDataset
 from torch.utils.data import DataLoader
+from src.utils.tokenization_mode import (
+    ensure_runtime_mode_compatibility,
+    resolve_artifact_tokenization_method,
+    validate_tokenization_method,
+)
 
 from src.utils.utils import pickle_load
 from torch import nn, optim
@@ -499,15 +504,22 @@ def main():
 
     # 設定を読み込み
     config = yaml.load(open(args.config, 'r'), Loader=yaml.FullLoader)
-    tokenization_method = config['data'].get('tokenization_method', 'standard')
+    tokenization_method = validate_tokenization_method(
+        config['data'].get('tokenization_method', 'standard'),
+        context='data.tokenization_method'
+    )
+    config['data']['tokenization_method'] = tokenization_method
     use_difficulty = config['model'].get('use_difficulty', False)
 
-    supported_tokenization = {'standard', 'cp_limb_v1', 'remi'}
-    if tokenization_method not in supported_tokenization:
-        raise ValueError(
-            f"Unsupported tokenization_method: {tokenization_method}. "
-            f"Supported: {sorted(supported_tokenization)}"
-        )
+    ensure_runtime_mode_compatibility(
+        requested_mode=tokenization_method,
+        vocab_path=config['data']['vocab_path'],
+        data_dir=config['data']['data_dir'],
+    )
+    artifact_mode, artifact_mode_source = resolve_artifact_tokenization_method(
+        config['data']['vocab_path'],
+        config['data']['data_dir'],
+    )
 
     # デバイスの選択（コマンドライン引数が優先）
     if args.device is not None:
@@ -533,6 +545,10 @@ def main():
 
     print(f'[info] Using device: {device}')
     print(f'[info] Tokenization method: {tokenization_method}')
+    if artifact_mode is not None:
+        print(f'[info] Artifact tokenization mode: {artifact_mode} ({artifact_mode_source})')
+    else:
+        print('[info] Artifact tokenization mode: unknown (legacy standard fallback)')
     trained_steps = config['training']['trained_steps']
     lr_decay_steps = config['training']['lr_decay_steps']
     max_lr = config['training']['max_lr']

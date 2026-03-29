@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import random
+import argparse
 from copy import deepcopy
 
 import numpy as np
@@ -24,6 +25,24 @@ from drum_dataloader import DrumTransformerDataset
 from model.musemorphose import MuseMorphose
 from utils import pickle_load, numpy_to_tensor, tensor_to_numpy
 from drum_to_midi import cp_data_to_midi
+
+try:
+    from src.utils.tokenization_mode import (
+        ensure_runtime_mode_compatibility,
+        resolve_artifact_tokenization_method,
+        validate_tokenization_method,
+    )
+except ModuleNotFoundError:
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[2]
+    if str(project_root) not in sys.path:
+        sys.path.append(str(project_root))
+    from src.utils.tokenization_mode import (
+        ensure_runtime_mode_compatibility,
+        resolve_artifact_tokenization_method,
+        validate_tokenization_method,
+    )
 
 
 def temperatured_softmax(logits, temperature):
@@ -263,9 +282,20 @@ def generate_cp_sequence(
 
             cur_input_len = len(generated)
 
+    note_type_idx = struct_token2idx.get('<NOTE>', struct_token2idx['<PAD>'])
+    pad_type_idx = struct_token2idx['<PAD>']
+
+    cp_type_seq = []
+    for ev_type, struct_idx, *_ in generated_final:
+        if int(ev_type) == 1:
+            cp_type_seq.append(note_type_idx)
+        elif int(ev_type) == 0:
+            cp_type_seq.append(int(struct_idx))
+        else:
+            cp_type_seq.append(pad_type_idx)
+
     cp_data = {
-        'event_type': [x[0] for x in generated_final],
-        'struct_token': [x[1] for x in generated_final],
+        'cp_type': cp_type_seq,
         'cp_pos': [x[2] for x in generated_final],
         'cp_hand1': [x[3] for x in generated_final],
         'cp_hand2': [x[4] for x in generated_final],
@@ -305,8 +335,28 @@ Example:
     n_samples_per_piece = args.n_samples_per_piece
 
     config = yaml.load(open(config_path, 'r'), Loader=yaml.FullLoader)
-    if config['data'].get('tokenization_method', 'standard') != 'cp_limb_v1':
-        raise ValueError('This script requires data.tokenization_method=cp_limb_v1')
+    tokenization_method = validate_tokenization_method(
+        config['data'].get('tokenization_method', 'standard'),
+        context='data.tokenization_method',
+    )
+    if tokenization_method != 'cp_limb_v1':
+        raise ValueError(
+            'This script requires data.tokenization_method=cp_limb_v1. '
+            f'Given: {tokenization_method}'
+        )
+
+    ensure_runtime_mode_compatibility(
+        requested_mode=tokenization_method,
+        vocab_path=config['data']['vocab_path'],
+        data_dir=config['data']['data_dir'],
+    )
+    artifact_mode, artifact_mode_source = resolve_artifact_tokenization_method(
+        config['data']['vocab_path'],
+        config['data']['data_dir'],
+    )
+    print(f"[info] Tokenization method: {tokenization_method}")
+    if artifact_mode is not None:
+        print(f"[info] Artifact tokenization mode: {artifact_mode} ({artifact_mode_source})")
 
     device = config['training']['device']
     use_difficulty = config['model'].get('use_difficulty', False)
@@ -320,7 +370,7 @@ Example:
         pieces=pickle_load(config['data']['test_split']),
         pad_to_same=False,
         use_difficulty=use_difficulty,
-        tokenization_method='cp_limb_v1',
+        tokenization_method=tokenization_method,
     )
 
     mconf = config['model']
@@ -347,7 +397,7 @@ Example:
         n_s_foot_cls=mconf.get('n_s_foot_cls', 8),
         n_s_move_cls=mconf.get('n_s_move_cls', 8),
         use_difficulty=use_difficulty,
-        tokenization_method='cp_limb_v1',
+        tokenization_method=tokenization_method,
         cp_event_type_vocab_size=len(dset.event_type2idx),
         cp_struct_vocab_size=len(dset.struct_token2idx),
         cp_pos_vocab_size=dset.pos_pad_value + 1,
@@ -441,17 +491,17 @@ Example:
             )
 
             with open(out_prefix + '.txt', 'w') as f:
-                for ev_type, st, pos, h1, h2, rf, lf in zip(
-                    cp_data['event_type'],
-                    cp_data['struct_token'],
+                for cp_type, pos, h1, h2, rf, lf in zip(
+                    cp_data['cp_type'],
                     cp_data['cp_pos'],
                     cp_data['cp_hand1'],
                     cp_data['cp_hand2'],
                     cp_data['cp_right_foot'],
                     cp_data['cp_left_foot'],
                 ):
-                    if ev_type == 0:
-                        f.write(f"STRUCT {dset.idx2struct_token.get(st, '<UNK>')}\n")
+                    cp_type_tok = dset.idx2struct_token.get(cp_type, '<UNK>')
+                    if cp_type_tok != '<NOTE>':
+                        f.write(f"STRUCT {cp_type_tok}\n")
                     else:
                         f.write(
                             'CP '

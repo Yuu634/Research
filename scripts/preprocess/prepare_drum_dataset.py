@@ -9,18 +9,54 @@ from pathlib import Path
 from tqdm import tqdm
 import numpy as np
 import miditoolkit
-from drum_tokenizer import DrumTokenizer
-from drum_cp_tokenizer import DrumCPTokenizer
-from drum_tokenizer import DRUM_NOTE_MAP
+import sys
+
+try:
+    from src.tokenizers.drum_tokenizer import DrumTokenizer, DRUM_NOTE_MAP
+    from src.tokenizers.drum_cp_tokenizer import DrumCPTokenizer
+    from src.utils.tokenization_mode import (
+        validate_tokenization_method,
+        write_dataset_tokenization_metadata,
+    )
+    from src.utils.tokenization_policy import (
+        POSITIONS_PER_BEAT,
+        classify_velocity_level,
+        quantize_step_in_bar,
+    )
+except ModuleNotFoundError:
+    project_root = Path(__file__).resolve().parents[2]
+    if str(project_root) not in sys.path:
+        sys.path.append(str(project_root))
+    from src.tokenizers.drum_tokenizer import DrumTokenizer, DRUM_NOTE_MAP
+    from src.tokenizers.drum_cp_tokenizer import DrumCPTokenizer
+    from src.utils.tokenization_mode import (
+        validate_tokenization_method,
+        write_dataset_tokenization_metadata,
+    )
+    from src.utils.tokenization_policy import (
+        POSITIONS_PER_BEAT,
+        classify_velocity_level,
+        quantize_step_in_bar,
+    )
 
 
 class RemiDrumTokenizer:
     """ドラムMIDIをREMI風イベント列に変換する簡易トークナイザー"""
 
     def __init__(self):
-        self.beats_per_bar = 96  # 4/4を96分割（1拍24分割、Standard/CPと統一）
+        self.beats_per_bar = 4 * POSITIONS_PER_BEAT  # 4/4を96分割（1拍24分割、Standard/CPと統一）
         self.max_duration_steps = 256
         self.drum_pitches = sorted(set(DRUM_NOTE_MAP.keys()))
+        self.last_conversion_info = {
+            'drum_track_count': 0,
+            'non_drum_tracks_excluded': 0,
+            'total_drum_notes': 0,
+        }
+        self.velocity_level_to_bin = {
+            'Ghost': 0,
+            'Normal': 16,
+            'Accent': 31,
+        }
 
         self.vocab = self._build_vocabulary()
         self.token2idx = {token: idx for idx, token in enumerate(self.vocab)}
@@ -38,7 +74,15 @@ class RemiDrumTokenizer:
 
     def save_vocab(self, path):
         with open(path, 'wb') as f:
-            pickle.dump((self.token2idx, self.idx2token), f)
+            pickle.dump(
+                {
+                    'tokenization_method': 'remi',
+                    'schema_version': 1,
+                    'token2idx': self.token2idx,
+                    'idx2token': self.idx2token,
+                },
+                f,
+            )
 
     def _get_tempo_at_tick(self, midi_obj, tick):
         if not midi_obj.tempo_changes:
@@ -51,33 +95,46 @@ class RemiDrumTokenizer:
                 break
         return max(30, min(240, curr))
 
+    def _collect_drum_notes(self, midi_obj):
+        drum_tracks = [inst for inst in midi_obj.instruments if inst.is_drum]
+        non_drum_tracks_with_notes = [inst for inst in midi_obj.instruments if not inst.is_drum and len(inst.notes) > 0]
+
+        if not drum_tracks:
+            raise ValueError('No drum track found in MIDI file')
+
+        drum_notes = []
+        for inst in drum_tracks:
+            drum_notes.extend(inst.notes)
+
+        drum_notes.sort(key=lambda n: (int(n.start), int(n.pitch), int(n.end)))
+
+        self.last_conversion_info = {
+            'drum_track_count': len(drum_tracks),
+            'non_drum_tracks_excluded': len(non_drum_tracks_with_notes),
+            'total_drum_notes': len(drum_notes),
+        }
+        return drum_notes
+
     def midi_to_tokens(self, midi_path):
         midi_obj = miditoolkit.MidiFile(midi_path)
-        drum_track = None
-        for inst in midi_obj.instruments:
-            if inst.is_drum:
-                drum_track = inst
-                break
-
-        if drum_track is None:
-            raise ValueError('No drum track found in MIDI file')
+        drum_notes = self._collect_drum_notes(midi_obj)
 
         ticks_per_beat = midi_obj.ticks_per_beat
         ticks_per_bar = ticks_per_beat * 4
-        step_ticks = max(1, ticks_per_beat // 24)  # 1拍を24分割
+        step_ticks = max(1, ticks_per_beat // POSITIONS_PER_BEAT)  # 1拍を24分割
 
-        max_tick = max((n.end for n in drum_track.notes), default=0)
+        max_tick = max((n.end for n in drum_notes), default=0)
         n_bars = int(np.ceil(max_tick / ticks_per_bar))
         if n_bars == 0:
             n_bars = 1
 
         notes_by_bar_step = {}
-        for note in drum_track.notes:
+        for note in drum_notes:
             if note.pitch not in DRUM_NOTE_MAP:
                 continue
             bar_idx = max(0, int(note.start // ticks_per_bar))
             in_bar_tick = note.start - bar_idx * ticks_per_bar
-            step = int(round(in_bar_tick / step_ticks))
+            step = quantize_step_in_bar(in_bar_tick, ticks_per_beat)
             step = max(0, min(self.beats_per_bar - 1, step))
             notes_by_bar_step.setdefault((bar_idx, step), []).append(note)
 
@@ -95,7 +152,8 @@ class RemiDrumTokenizer:
             for step in steps:
                 tokens.append(f'<BEAT_{step}>')
                 for note in sorted(notes_by_bar_step[(bar, step)], key=lambda x: (x.start, x.pitch)):
-                    velocity_bin = int(np.clip(note.velocity * 32 // 128, 0, 31))
+                    velocity_level = classify_velocity_level(int(note.velocity))
+                    velocity_bin = self.velocity_level_to_bin[velocity_level]
                     duration_steps = int(round((note.end - note.start) / step_ticks))
                     duration_steps = int(np.clip(duration_steps, 1, self.max_duration_steps))
 
@@ -127,6 +185,11 @@ def prepare_drum_dataset(
         vocab_path: 語彙ファイルの保存先パス
         file_extension: MIDIファイルの拡張子
     """
+    tokenization_method = validate_tokenization_method(
+        tokenization_method,
+        context='--tokenization_method'
+    )
+
     # 出力ディレクトリを作成
     os.makedirs(output_dir, exist_ok=True)
 
@@ -135,13 +198,35 @@ def prepare_drum_dataset(
         tokenizer = DrumCPTokenizer()
     elif tokenization_method == 'remi':
         tokenizer = RemiDrumTokenizer()
-    else:
+    elif tokenization_method == 'standard':
         tokenizer = DrumTokenizer()
+    else:
+        raise ValueError(
+            f"Unsupported --tokenization_method: {tokenization_method}. "
+            "Supported: cp_limb_v1, remi, standard"
+        )
 
     # 語彙を保存
     tokenizer.save_vocab(vocab_path)
     print(f"Vocabulary saved to: {vocab_path}")
     print(f"Vocabulary size: {tokenizer.vocab_size}")
+
+    metadata_extra = None
+    if tokenization_method == 'remi':
+        metadata_extra = {
+            'input_scope': 'drum_only',
+            'non_drum_tracks_policy': 'excluded',
+            'velocity_policy': 'shared_3level',
+            'position_policy': 'standard_24div',
+            'remi_velocity_representation': 'discrete_bins',
+        }
+
+    metadata_path = write_dataset_tokenization_metadata(
+        output_dir,
+        tokenization_method,
+        extra_metadata=metadata_extra,
+    )
+    print(f"Tokenization metadata saved to: {metadata_path}")
 
     # MIDIファイルのリストを取得
     midi_files = list(Path(midi_dir).rglob(f'*{file_extension}'))
@@ -161,7 +246,10 @@ def prepare_drum_dataset(
         'avg_tokens_per_file': 0,
         'avg_bars_per_file': 0,
         'token_lengths': [],
-        'bar_counts': []
+        'bar_counts': [],
+        'remi_drum_tracks_used_total': 0,
+        'remi_non_drum_tracks_excluded_total': 0,
+        'remi_files_with_non_drum_excluded': 0,
     }
 
     # 各MIDIファイルを処理
@@ -172,10 +260,18 @@ def prepare_drum_dataset(
         try:
             if tokenization_method == 'cp_limb_v1':
                 cp_data, bar_positions = tokenizer.midi_to_cp_data(str(midi_file))
-                n_tokens = len(cp_data['event_type'])
+                n_tokens = len(cp_data['cp_type'])
             else:
                 # MIDIをトークン列に変換
                 tokens, bar_positions = tokenizer.midi_to_tokens(str(midi_file))
+
+                if tokenization_method == 'remi':
+                    info = getattr(tokenizer, 'last_conversion_info', {})
+                    excluded_non_drum = int(info.get('non_drum_tracks_excluded', 0))
+                    stats['remi_drum_tracks_used_total'] += int(info.get('drum_track_count', 0))
+                    stats['remi_non_drum_tracks_excluded_total'] += excluded_non_drum
+                    if excluded_non_drum > 0:
+                        stats['remi_files_with_non_drum_excluded'] += 1
 
                 # インデックス列に変換
                 token_indices = tokenizer.tokens_to_indices(tokens)
@@ -237,6 +333,12 @@ def prepare_drum_dataset(
         print(f"  Max:  {max(stats['bar_counts'])}")
         print(f"  Mean: {np.mean(stats['bar_counts']):.2f}")
         print(f"  Std:  {np.std(stats['bar_counts']):.2f}")
+
+    if tokenization_method == 'remi':
+        print(f"\nREMI drum-only policy summary:")
+        print(f"  Drum tracks used (total):            {stats['remi_drum_tracks_used_total']}")
+        print(f"  Non-drum tracks excluded (total):    {stats['remi_non_drum_tracks_excluded_total']}")
+        print(f"  Files with non-drum exclusions:      {stats['remi_files_with_non_drum_excluded']}")
 
     # 失敗したファイルのリストを保存
     if failed_files:

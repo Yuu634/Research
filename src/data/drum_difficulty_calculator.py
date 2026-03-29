@@ -393,13 +393,13 @@ def compute_all_difficulty_scores(bar_tokens: List[str], bpm: float = 120.0) -> 
     }
 
 
-def _cp_data_to_tokens(cp_data: Dict, idx2struct: Dict, idx2limb: Dict) -> List[str]:
+def _cp_data_to_tokens(cp_data: Dict, idx2type: Dict, idx2limb: Dict) -> List[str]:
     """
     CP形式データを難易度計算用のトークン列に復元する。
 
     Args:
-        cp_data: CP形式のデータ（event_type, struct_token, cp_pos, cp_hand1, etc.）
-        idx2struct: 構造トークンのインデックス→トークン辞書
+        cp_data: CP形式のデータ（cp_type, cp_pos, cp_hand1, etc.）
+        idx2type: Typeトークンのインデックス→トークン辞書
         idx2limb: 肢トークンのインデックス→トークン辞書
 
     Returns:
@@ -407,20 +407,35 @@ def _cp_data_to_tokens(cp_data: Dict, idx2struct: Dict, idx2limb: Dict) -> List[
     """
     tokens = []
 
-    for ev_type, struct_id, pos_id, h1, h2, rf, lf in zip(
-        cp_data['event_type'],
-        cp_data['struct_token'],
+    cp_type_seq = cp_data.get('cp_type')
+    if cp_type_seq is None and cp_data.get('event_type') is not None and cp_data.get('struct_token') is not None:
+        cp_type_seq = []
+        for ev_type, struct_id in zip(cp_data['event_type'], cp_data['struct_token']):
+            if int(ev_type) == 1:
+                cp_type_seq.append(-1)
+            elif int(ev_type) == 2:
+                cp_type_seq.append(-2)
+            else:
+                cp_type_seq.append(int(struct_id))
+
+    for type_id, pos_id, h1, h2, rf, lf in zip(
+        cp_type_seq,
         cp_data['cp_pos'],
         cp_data['cp_hand1'],
         cp_data['cp_hand2'],
         cp_data['cp_right_foot'],
         cp_data['cp_left_foot'],
     ):
-        # 0: STRUCT, 1: CP
-        if int(ev_type) == 0:
-            st = idx2struct.get(int(struct_id), '<PAD>')
-            if st != '<PAD>':
-                tokens.append(st)
+        if int(type_id) == -1:
+            cp_type_token = '<NOTE>'
+        elif int(type_id) == -2:
+            cp_type_token = '<PAD>'
+        else:
+            cp_type_token = idx2type.get(int(type_id), '<PAD>')
+
+        if cp_type_token != '<NOTE>':
+            if cp_type_token != '<PAD>':
+                tokens.append(cp_type_token)
             continue
 
         if int(pos_id) < 24:
@@ -428,7 +443,7 @@ def _cp_data_to_tokens(cp_data: Dict, idx2struct: Dict, idx2limb: Dict) -> List[
 
         for limb_id in (h1, h2, rf, lf):
             limb_tok = idx2limb.get(int(limb_id), '<PAD>')
-            if limb_tok not in ('<PAD>', '<NONE>'):
+            if limb_tok not in ('<PAD>', '<NONE>', '<NA>'):
                 tokens.append(limb_tok)
 
     return tokens
@@ -455,7 +470,7 @@ def compute_difficulty_bounds(data_dir: str, vocab_path: str, output_path: str, 
     is_cp_vocab = isinstance(vocab_data, dict) and vocab_data.get('tokenization_method') == 'cp_limb_v1'
     
     if is_cp_vocab:
-        idx2struct = vocab_data['idx2struct_token']
+        idx2type = vocab_data.get('idx2type_token', vocab_data['idx2struct_token'])
         idx2limb = vocab_data['idx2limb_token']
         idx2token = None
     else:
@@ -496,22 +511,26 @@ def compute_difficulty_bounds(data_dir: str, vocab_path: str, output_path: str, 
 
             for b in range(len(bar_pos) - 1):
                 st, ed = bar_pos[b], bar_pos[b + 1]
-                if st >= ed or ed > len(tokens):
+                token_len = len(tokens['cp_type']) if isinstance(tokens, dict) and 'cp_type' in tokens else (
+                    len(tokens['event_type']) if isinstance(tokens, dict) and 'event_type' in tokens else len(tokens)
+                )
+                if st >= ed or ed > token_len:
                     continue
 
                 # CP形式と標準形式で異なるトークン列復元ロジック
                 if is_cp_vocab and isinstance(tokens, dict):
                     # CP形式の復元
                     bar_cp_data = {
-                        'event_type': tokens['event_type'][st:ed],
-                        'struct_token': tokens['struct_token'][st:ed],
+                        'cp_type': tokens['cp_type'][st:ed] if 'cp_type' in tokens else None,
+                        'event_type': tokens['event_type'][st:ed] if 'event_type' in tokens else None,
+                        'struct_token': tokens['struct_token'][st:ed] if 'struct_token' in tokens else None,
                         'cp_pos': tokens['cp_pos'][st:ed],
                         'cp_hand1': tokens['cp_hand1'][st:ed],
                         'cp_hand2': tokens['cp_hand2'][st:ed],
                         'cp_right_foot': tokens['cp_right_foot'][st:ed],
                         'cp_left_foot': tokens['cp_left_foot'][st:ed],
                     }
-                    bar_tokens = _cp_data_to_tokens(bar_cp_data, idx2struct, idx2limb)
+                    bar_tokens = _cp_data_to_tokens(bar_cp_data, idx2type, idx2limb)
                 else:
                     # 標準形式の復元
                     bar_token_indices = tokens[st:ed]

@@ -2,10 +2,10 @@
 四肢ベースCPトークナイザー
 
 CPイベント:
-  [Position, Hand1, Hand2, Right_Foot, Left_Foot]
+    [Type, Position, Hand1, Hand2, Right_Foot, Left_Foot]
 
-非CPイベント:
-  <TEMPO_xxx>, <BAR>, <BEAT_x>, <EOS>
+Type:
+    <NOTE> または構造トークン（<TEMPO_xxx>, <BAR>, <BEAT_x>, <EOS>）
 """
 import pickle
 from typing import Dict, List, Tuple
@@ -20,12 +20,17 @@ from src.tokenizers.drum_tokenizer import (
     POSITIONS_PER_BEAT,
     DrumTokenizer,
 )
+from src.utils.tokenization_policy import (
+    CP_POS_PAD_VALUE,
+    quantize_position_in_beat,
+)
 
 
 class DrumCPTokenizer:
     def __init__(self):
         self.base = DrumTokenizer()
 
+        # 学習器側互換のため維持（cp_type から派生する補助系列）
         self.event_type2idx = {
             "STRUCT": 0,
             "CP": 1,
@@ -33,25 +38,30 @@ class DrumCPTokenizer:
         }
         self.idx2event_type = {v: k for k, v in self.event_type2idx.items()}
 
-        self.struct_vocab = self._build_struct_vocab()
-        self.struct_token2idx = {tok: i for i, tok in enumerate(self.struct_vocab)}
-        self.idx2struct_token = {i: tok for tok, i in self.struct_token2idx.items()}
+        self.type_vocab = self._build_type_vocab()
+        self.type_token2idx = {tok: i for i, tok in enumerate(self.type_vocab)}
+        self.idx2type_token = {i: tok for tok, i in self.type_token2idx.items()}
+
+        # 既存コード互換エイリアス
+        self.struct_vocab = self.type_vocab
+        self.struct_token2idx = self.type_token2idx
+        self.idx2struct_token = self.idx2type_token
 
         self.limb_vocab = self._build_limb_vocab()
         self.limb_token2idx = {tok: i for i, tok in enumerate(self.limb_vocab)}
         self.idx2limb_token = {i: tok for tok, i in self.limb_token2idx.items()}
 
         # 既存コード互換: prepare_drum_dataset.py が tokenizer.vocab_size を参照する
-        self.struct_vocab_size = len(self.struct_vocab)
+        self.struct_vocab_size = len(self.type_vocab)
         self.limb_vocab_size = len(self.limb_vocab)
         self.event_type_vocab_size = len(self.event_type2idx)
         self.vocab_size = self.struct_vocab_size
 
-        # 0-23 を有効POS, 24 を PAD_POS として使用
-        self.pos_pad_value = 24
+        # 0-23 を有効POS, 24 を <NA> (非NOTE用) として使用
+        self.pos_pad_value = CP_POS_PAD_VALUE
 
-    def _build_struct_vocab(self) -> List[str]:
-        vocab = ["<PAD>", "<EOS>", "<BAR>"]
+    def _build_type_vocab(self) -> List[str]:
+        vocab = ["<PAD>", "<NOTE>", "<EOS>", "<BAR>"]
         for tempo in range(60, 245, 5):
             vocab.append(f"<TEMPO_{tempo}>")
         vocab.extend([f"<BEAT_{i}>" for i in range(1, 5)])
@@ -59,7 +69,95 @@ class DrumCPTokenizer:
 
     def _build_limb_vocab(self) -> List[str]:
         perf_tokens = [tok for tok in self.base.vocab if not tok.startswith("<")]
-        return ["<PAD>", "<NONE>"] + sorted(perf_tokens)
+        extra_tokens = [
+            "HH_PEDAL_HIT_Down",
+            "HH_PEDAL_HIT_Up",
+            "TAMBOURINE_HIT_Normal",
+            "TAMBOURINE_HIT_Accent",
+        ]
+        for token in extra_tokens:
+            if token not in perf_tokens:
+                perf_tokens.append(token)
+        return ["<PAD>", "<NA>", "<NONE>"] + sorted(perf_tokens)
+
+    def _validate_cp_schema(
+        self,
+        cp_type_seq: List[int],
+        cp_pos_seq: List[int],
+        cp_hand1_seq: List[int],
+        cp_hand2_seq: List[int],
+        cp_rf_seq: List[int],
+        cp_lf_seq: List[int],
+        type_note: int,
+        type_pad: int,
+        limb_na: int,
+        limb_pad: int,
+    ) -> None:
+        seq_lengths = {
+            len(cp_type_seq),
+            len(cp_pos_seq),
+            len(cp_hand1_seq),
+            len(cp_hand2_seq),
+            len(cp_rf_seq),
+            len(cp_lf_seq),
+        }
+        if len(seq_lengths) != 1:
+            raise ValueError(f"CP schema violation: mismatched sequence lengths {sorted(seq_lengths)}")
+
+        for idx, type_id in enumerate(cp_type_seq):
+            if type_id == type_note:
+                if cp_pos_seq[idx] == self.pos_pad_value:
+                    raise ValueError(
+                        "CP schema violation: <NOTE> event cannot use <NA> pos value. "
+                        f"index={idx}"
+                    )
+                if cp_pos_seq[idx] < 0 or cp_pos_seq[idx] >= POSITIONS_PER_BEAT:
+                    raise ValueError(
+                        "CP schema violation: <NOTE> position out of range. "
+                        f"index={idx}, pos={cp_pos_seq[idx]}"
+                    )
+                if (
+                    cp_hand1_seq[idx] == limb_na
+                    or cp_hand2_seq[idx] == limb_na
+                    or cp_rf_seq[idx] == limb_na
+                    or cp_lf_seq[idx] == limb_na
+                ):
+                    raise ValueError(
+                        "CP schema violation: <NOTE> event cannot use <NA> in limb slots. "
+                        f"index={idx}"
+                    )
+            elif type_id == type_pad:
+                if cp_pos_seq[idx] != self.pos_pad_value:
+                    raise ValueError(
+                        "CP schema violation: <PAD> event must use <NA> pos value. "
+                        f"index={idx}, pos={cp_pos_seq[idx]}"
+                    )
+                if not (
+                    cp_hand1_seq[idx] == limb_pad
+                    and cp_hand2_seq[idx] == limb_pad
+                    and cp_rf_seq[idx] == limb_pad
+                    and cp_lf_seq[idx] == limb_pad
+                ):
+                    raise ValueError(
+                        "CP schema violation: <PAD> event must pad limb slots. "
+                        f"index={idx}"
+                    )
+            else:
+                if cp_pos_seq[idx] != self.pos_pad_value:
+                    raise ValueError(
+                        "CP schema violation: structural type must use <NA> pos value. "
+                        f"index={idx}, pos={cp_pos_seq[idx]}"
+                    )
+                if not (
+                    cp_hand1_seq[idx] == limb_na
+                    and cp_hand2_seq[idx] == limb_na
+                    and cp_rf_seq[idx] == limb_na
+                    and cp_lf_seq[idx] == limb_na
+                ):
+                    raise ValueError(
+                        "CP schema violation: structural type must use <NA> in limb slots. "
+                        f"index={idx}"
+                    )
 
     def _is_hand_note(self, drum_type: str) -> bool:
         return drum_type not in ("KICK", "HH_PEDAL")
@@ -109,6 +207,10 @@ class DrumCPTokenizer:
         token = f"{drum_type}_{technique}_{velocity_level}"
 
         if token not in self.base.token2idx:
+            if drum_type == "TAMBOURINE":
+                fallback = "TAMBOURINE_HIT_Normal"
+                if fallback in self.base.token2idx:
+                    return drum_type, fallback
             fallback = f"{drum_type}_HIT_Normal"
             if fallback in self.base.token2idx:
                 token = fallback
@@ -131,6 +233,10 @@ class DrumCPTokenizer:
         payload = {
             "format": "cp_limb_v1",
             "tokenization_method": "cp_limb_v1",
+            "schema_version": 1,
+            "type_token2idx": self.type_token2idx,
+            "idx2type_token": self.idx2type_token,
+            # backward compatibility aliases
             "event_type2idx": self.event_type2idx,
             "idx2event_type": self.idx2event_type,
             "struct_token2idx": self.struct_token2idx,
@@ -167,8 +273,7 @@ class DrumCPTokenizer:
         max_tick = max(note.end for note in drum_track.notes) if drum_track.notes else 0
         n_bars = int(np.ceil(max_tick / DEFAULT_BAR_RESOL))
 
-        event_type_seq = []
-        struct_token_seq = []
+        cp_type_seq = []
         cp_pos_seq = []
         cp_hand1_seq = []
         cp_hand2_seq = []
@@ -176,29 +281,31 @@ class DrumCPTokenizer:
         cp_lf_seq = []
         bar_positions = []
 
-        struct_pad = self.struct_token2idx["<PAD>"]
+        type_note = self.type_token2idx["<NOTE>"]
+        type_pad = self.type_token2idx["<PAD>"]
         limb_pad = self.limb_token2idx["<PAD>"]
+        limb_na = self.limb_token2idx["<NA>"]
 
-        def append_struct(struct_token: str):
-            event_type_seq.append(self.event_type2idx["STRUCT"])
-            struct_token_seq.append(self.struct_token2idx[struct_token])
+        def append_struct(type_token: str):
+            cp_type_seq.append(self.type_token2idx[type_token])
             cp_pos_seq.append(self.pos_pad_value)
-            cp_hand1_seq.append(limb_pad)
-            cp_hand2_seq.append(limb_pad)
-            cp_rf_seq.append(limb_pad)
-            cp_lf_seq.append(limb_pad)
+            cp_hand1_seq.append(limb_na)
+            cp_hand2_seq.append(limb_na)
+            cp_rf_seq.append(limb_na)
+            cp_lf_seq.append(limb_na)
 
         def append_cp(pos: int, hand1: str, hand2: str, rf: str, lf: str):
-            event_type_seq.append(self.event_type2idx["CP"])
-            struct_token_seq.append(struct_pad)
+            cp_type_seq.append(type_note)
             cp_pos_seq.append(pos)
             cp_hand1_seq.append(self.limb_token2idx[hand1])
             cp_hand2_seq.append(self.limb_token2idx[hand2])
             cp_rf_seq.append(self.limb_token2idx[rf])
             cp_lf_seq.append(self.limb_token2idx[lf])
 
+        hh_left_foot_pressed = False
+
         for bar in range(n_bars):
-            bar_positions.append(len(event_type_seq))
+            bar_positions.append(len(cp_type_seq))
 
             bar_start_tick = bar * DEFAULT_BAR_RESOL
             bar_end_tick = (bar + 1) * DEFAULT_BAR_RESOL
@@ -224,7 +331,7 @@ class DrumCPTokenizer:
             current_beat = -1
             for tick_in_bar in sorted(tick_events.keys()):
                 beat = tick_in_bar // DEFAULT_BEAT_RESOL
-                pos_in_beat = (tick_in_bar % DEFAULT_BEAT_RESOL) * POSITIONS_PER_BEAT // DEFAULT_BEAT_RESOL
+                pos_in_beat = quantize_position_in_beat(tick_in_bar, DEFAULT_BEAT_RESOL)
 
                 if beat != current_beat:
                     append_struct(f"<BEAT_{beat + 1}>")
@@ -233,24 +340,63 @@ class DrumCPTokenizer:
                 hand_candidates = []
                 rf = "<NONE>"
                 lf = "<NONE>"
+                saw_hh_open = False
+                saw_hh_closed = False
 
                 for drum_type, token in tick_events[tick_in_bar]:
                     if self._is_hand_note(drum_type):
                         hand_candidates.append(token)
+                        if token.startswith("HH_OPEN_"):
+                            saw_hh_open = True
+                        elif token.startswith("HH_CLOSED_"):
+                            saw_hh_closed = True
                     else:
                         rf, lf = self._assign_feet(drum_type, token, rf, lf)
+                        if drum_type == "HH_PEDAL":
+                            hh_left_foot_pressed = True
 
-                hand_candidates = sorted(hand_candidates, key=self._hand_priority)
-                hand1 = hand_candidates[0] if len(hand_candidates) > 0 else "<NONE>"
-                hand2 = hand_candidates[1] if len(hand_candidates) > 1 else "<NONE>"
+                # HH_OPEN/HH_CLOSED から左足の開閉状態を推論し、遷移時のみトークンを付与する
+                transition_token = None
+                if saw_hh_open and hh_left_foot_pressed:
+                    transition_token = "HH_PEDAL_HIT_Up"
+                    hh_left_foot_pressed = False
+                elif saw_hh_closed and not hh_left_foot_pressed:
+                    transition_token = "HH_PEDAL_HIT_Down"
+                    hh_left_foot_pressed = True
 
-                append_cp(pos_in_beat, hand1, hand2, rf, lf)
+                if lf == "<NONE>" and transition_token:
+                    lf = transition_token
+
+                sorted_hands = sorted(hand_candidates, key=self._hand_priority)
+                if sorted_hands:
+                    for group_index in range(0, len(sorted_hands), 2):
+                        group = sorted_hands[group_index:group_index + 2]
+                        hand1 = group[0] if len(group) > 0 else "<NONE>"
+                        hand2 = group[1] if len(group) > 1 else "<NONE>"
+                        if group_index == 0:
+                            append_cp(pos_in_beat, hand1, hand2, rf, lf)
+                        else:
+                            append_cp(pos_in_beat, hand1, hand2, "<NONE>", "<NONE>")
+                else:
+                    append_cp(pos_in_beat, "<NONE>", "<NONE>", rf, lf)
 
         append_struct("<EOS>")
 
+        self._validate_cp_schema(
+            cp_type_seq,
+            cp_pos_seq,
+            cp_hand1_seq,
+            cp_hand2_seq,
+            cp_rf_seq,
+            cp_lf_seq,
+            type_note,
+            type_pad,
+            limb_na,
+            limb_pad,
+        )
+
         data = {
-            "event_type": event_type_seq,
-            "struct_token": struct_token_seq,
+            "cp_type": cp_type_seq,
             "cp_pos": cp_pos_seq,
             "cp_hand1": cp_hand1_seq,
             "cp_hand2": cp_hand2_seq,

@@ -23,6 +23,11 @@ from src.data.drum_dataloader import DrumTransformerDataset
 from src.models.musemorphose import MuseMorphose
 from src.utils.utils import pickle_load, numpy_to_tensor, tensor_to_numpy
 from src.utils.drum_to_midi import tokens_to_midi
+from src.utils.tokenization_mode import (
+    ensure_runtime_mode_compatibility,
+    resolve_artifact_tokenization_method,
+    validate_tokenization_method,
+)
 
 import torch
 import yaml
@@ -309,12 +314,30 @@ Example:
 
     # 設定を読み込み
     config = yaml.load(open(config_path, 'r'), Loader=yaml.FullLoader)
+    tokenization_method = validate_tokenization_method(
+        config['data'].get('tokenization_method', 'standard'),
+        context='data.tokenization_method',
+    )
+    config['data']['tokenization_method'] = tokenization_method
     device = config['training']['device']
-    if config['data'].get('tokenization_method', 'standard') == 'cp_limb_v1':
+    if tokenization_method == 'cp_limb_v1':
         raise NotImplementedError(
             'generate_drum_difficulty.py is standard-tokenization oriented. '
             'Use a dedicated CP generation path for cp_limb_v1.'
         )
+
+    ensure_runtime_mode_compatibility(
+        requested_mode=tokenization_method,
+        vocab_path=config['data']['vocab_path'],
+        data_dir=config['data']['data_dir'],
+    )
+    artifact_mode, artifact_mode_source = resolve_artifact_tokenization_method(
+        config['data']['vocab_path'],
+        config['data']['data_dir'],
+    )
+    print(f'[info] Tokenization method: {tokenization_method}')
+    if artifact_mode is not None:
+        print(f'[info] Artifact tokenization mode: {artifact_mode} ({artifact_mode_source})')
 
     # データセット読み込み
     print('[info] Loading dataset...')
@@ -327,7 +350,7 @@ Example:
         pieces=pickle_load(config['data']['test_split']),
         pad_to_same=False,
         use_difficulty=True,
-        tokenization_method=config['data'].get('tokenization_method', 'standard')
+        tokenization_method=tokenization_method
     )
 
     print(f'[info] Dataset size: {len(dset)} pieces')

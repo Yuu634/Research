@@ -321,23 +321,39 @@ def tokens_to_midi(
     return converter.tokens_to_midi(tokens, output_path, bpm)
 
 
-def cp_events_to_tokens(cp_data: dict, idx2struct_token: dict, idx2limb_token: dict) -> List[str]:
+def cp_events_to_tokens(cp_data: dict, idx2type_token: dict, idx2limb_token: dict) -> List[str]:
     """CPイベント系列を既存トークン列に復元する。"""
     tokens: List[str] = []
 
-    for ev_type, struct_id, pos_id, h1, h2, rf, lf in zip(
-        cp_data['event_type'],
-        cp_data['struct_token'],
+    cp_type_seq = cp_data.get('cp_type')
+    if cp_type_seq is None and 'event_type' in cp_data and 'struct_token' in cp_data:
+        cp_type_seq = []
+        for ev_type, struct_id in zip(cp_data['event_type'], cp_data['struct_token']):
+            if int(ev_type) == 1:
+                cp_type_seq.append(-1)
+            elif int(ev_type) == 2:
+                cp_type_seq.append(-2)
+            else:
+                cp_type_seq.append(int(struct_id))
+
+    for type_id, pos_id, h1, h2, rf, lf in zip(
+        cp_type_seq,
         cp_data['cp_pos'],
         cp_data['cp_hand1'],
         cp_data['cp_hand2'],
         cp_data['cp_right_foot'],
         cp_data['cp_left_foot'],
     ):
-        if int(ev_type) == 0:
-            st = idx2struct_token.get(int(struct_id), '<PAD>')
-            if st != '<PAD>':
-                tokens.append(st)
+        if int(type_id) == -1:
+            cp_type_token = '<NOTE>'
+        elif int(type_id) == -2:
+            cp_type_token = '<PAD>'
+        else:
+            cp_type_token = idx2type_token.get(int(type_id), '<PAD>')
+
+        if cp_type_token != '<NOTE>':
+            if cp_type_token != '<PAD>':
+                tokens.append(cp_type_token)
             continue
 
         if int(pos_id) < POSITIONS_PER_BEAT:
@@ -345,7 +361,7 @@ def cp_events_to_tokens(cp_data: dict, idx2struct_token: dict, idx2limb_token: d
 
         for limb_id in (h1, h2, rf, lf):
             limb_token = idx2limb_token.get(int(limb_id), '<PAD>')
-            if limb_token not in ('<PAD>', '<NONE>'):
+            if limb_token not in ('<PAD>', '<NONE>', '<NA>'):
                 tokens.append(limb_token)
 
     return tokens
@@ -353,13 +369,13 @@ def cp_events_to_tokens(cp_data: dict, idx2struct_token: dict, idx2limb_token: d
 
 def cp_data_to_midi(
     cp_data: dict,
-    idx2struct_token: dict,
+    idx2type_token: dict,
     idx2limb_token: dict,
     output_path: str,
     bpm: Optional[int] = None
 ) -> miditoolkit.MidiFile:
     """CPデータからMIDIを生成するユーティリティ。"""
-    tokens = cp_events_to_tokens(cp_data, idx2struct_token, idx2limb_token)
+    tokens = cp_events_to_tokens(cp_data, idx2type_token, idx2limb_token)
     return tokens_to_midi(tokens, output_path, bpm=bpm)
 
 

@@ -460,7 +460,8 @@ def verify_pkl_tokens(
 
         if tokenization_method == 'cp_limb_v1':
             cp_data = data['cp_data']
-            tokens = cp_events_to_tokens(cp_data, data['idx2struct_token'], data['idx2limb_token'])
+            idx2type_token = data.get('idx2type_token', data['idx2struct_token'])
+            tokens = cp_events_to_tokens(cp_data, idx2type_token, data['idx2limb_token'])
             indices = []
         else:
             tokens = data['tokens']

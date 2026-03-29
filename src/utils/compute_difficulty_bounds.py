@@ -84,7 +84,7 @@ def compute_difficulty_bounds(data_dir, vocab_path, output_path, bpm=120.0):
 
     is_cp_vocab = isinstance(vocab_data, dict) and vocab_data.get('tokenization_method') == 'cp_limb_v1'
     if is_cp_vocab:
-        idx2struct = vocab_data['idx2struct_token']
+        idx2type = vocab_data.get('idx2type_token', vocab_data['idx2struct_token'])
         idx2limb = vocab_data['idx2limb_token']
         idx2token = None
         is_remi = False
@@ -130,32 +130,53 @@ def compute_difficulty_bounds(data_dir, vocab_path, output_path, bpm=120.0):
 
             for b in range(len(bar_pos) - 1):
                 st, ed = bar_pos[b], bar_pos[b + 1]
-                token_len = len(tokens['event_type']) if isinstance(tokens, dict) else len(tokens)
+                token_len = len(tokens['cp_type']) if isinstance(tokens, dict) and 'cp_type' in tokens else (
+                    len(tokens['event_type']) if isinstance(tokens, dict) and 'event_type' in tokens else len(tokens)
+                )
                 if st >= ed or ed > token_len:
                     continue
 
                 if is_cp_vocab and isinstance(tokens, dict):
                     # CP形式は prepare_drum_dataset_with_difficulty.py と同じ復元ロジックを使用
                     bar_tokens = []
-                    for ev_type, struct_id, pos_id, h1, h2, rf, lf in zip(
-                        tokens['event_type'][st:ed],
-                        tokens['struct_token'][st:ed],
+                    cp_type_seq = tokens.get('cp_type')
+                    if cp_type_seq is None and 'event_type' in tokens and 'struct_token' in tokens:
+                        cp_type_seq = []
+                        for ev_type, struct_id in zip(tokens['event_type'][st:ed], tokens['struct_token'][st:ed]):
+                            if int(ev_type) == 1:
+                                cp_type_seq.append(-1)
+                            elif int(ev_type) == 2:
+                                cp_type_seq.append(-2)
+                            else:
+                                cp_type_seq.append(int(struct_id))
+                    else:
+                        cp_type_seq = cp_type_seq[st:ed]
+
+                    for type_id, pos_id, h1, h2, rf, lf in zip(
+                        cp_type_seq,
                         tokens['cp_pos'][st:ed],
                         tokens['cp_hand1'][st:ed],
                         tokens['cp_hand2'][st:ed],
                         tokens['cp_right_foot'][st:ed],
                         tokens['cp_left_foot'][st:ed],
                     ):
-                        if int(ev_type) == 0:
-                            st_tok = idx2struct.get(int(struct_id), '<PAD>')
-                            if st_tok != '<PAD>':
-                                bar_tokens.append(st_tok)
+                        if int(type_id) == -1:
+                            cp_type_token = '<NOTE>'
+                        elif int(type_id) == -2:
+                            cp_type_token = '<PAD>'
+                        else:
+                            cp_type_token = idx2type.get(int(type_id), '<PAD>')
+
+                        if cp_type_token != '<NOTE>':
+                            if cp_type_token != '<PAD>':
+                                bar_tokens.append(cp_type_token)
                             continue
+
                         if int(pos_id) < 24:
                             bar_tokens.append(f'<POS_{int(pos_id)}>')
                         for limb_id in (h1, h2, rf, lf):
                             limb_tok = idx2limb.get(int(limb_id), '<PAD>')
-                            if limb_tok not in ('<PAD>', '<NONE>'):
+                            if limb_tok not in ('<PAD>', '<NONE>', '<NA>'):
                                 bar_tokens.append(limb_tok)
                 else:
                     bar_indices = tokens[st:ed]

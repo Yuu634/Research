@@ -24,25 +24,48 @@ from drum_difficulty_calculator import (
 )
 from drum_tokenizer import DRUM_NOTE_MAP
 
+try:
+    from src.utils.tokenization_mode import write_dataset_tokenization_metadata
+except ModuleNotFoundError:
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    if project_root not in sys.path:
+        sys.path.append(project_root)
+    from src.utils.tokenization_mode import write_dataset_tokenization_metadata
 
-def cp_data_to_tokens(cp_data, idx2struct, idx2limb):
+
+def cp_data_to_tokens(cp_data, idx2type, idx2limb):
     """CP形式データを難易度計算用のトークン列に近似復元する。"""
     tokens = []
 
-    for ev_type, struct_id, pos_id, h1, h2, rf, lf in zip(
-        cp_data['event_type'],
-        cp_data['struct_token'],
+    cp_type_seq = cp_data.get('cp_type')
+    if cp_type_seq is None and cp_data.get('event_type') is not None and cp_data.get('struct_token') is not None:
+        cp_type_seq = []
+        for ev_type, struct_id in zip(cp_data['event_type'], cp_data['struct_token']):
+            if int(ev_type) == 1:
+                cp_type_seq.append(-1)
+            elif int(ev_type) == 2:
+                cp_type_seq.append(-2)
+            else:
+                cp_type_seq.append(int(struct_id))
+
+    for type_id, pos_id, h1, h2, rf, lf in zip(
+        cp_type_seq,
         cp_data['cp_pos'],
         cp_data['cp_hand1'],
         cp_data['cp_hand2'],
         cp_data['cp_right_foot'],
         cp_data['cp_left_foot'],
     ):
-        # 0: STRUCT, 1: CP
-        if int(ev_type) == 0:
-            st = idx2struct.get(int(struct_id), '<PAD>')
-            if st != '<PAD>':
-                tokens.append(st)
+        if int(type_id) == -1:
+            cp_type_token = '<NOTE>'
+        elif int(type_id) == -2:
+            cp_type_token = '<PAD>'
+        else:
+            cp_type_token = idx2type.get(int(type_id), '<PAD>')
+
+        if cp_type_token != '<NOTE>':
+            if cp_type_token != '<PAD>':
+                tokens.append(cp_type_token)
             continue
 
         if int(pos_id) < 24:
@@ -50,7 +73,7 @@ def cp_data_to_tokens(cp_data, idx2struct, idx2limb):
 
         for limb_id in (h1, h2, rf, lf):
             limb_tok = idx2limb.get(int(limb_id), '<PAD>')
-            if limb_tok not in ('<PAD>', '<NONE>'):
+            if limb_tok not in ('<PAD>', '<NONE>', '<NA>'):
                 tokens.append(limb_tok)
 
     return tokens
@@ -137,7 +160,7 @@ def prepare_dataset_with_difficulty(
 
     is_cp_vocab = isinstance(vocab_data, dict) and vocab_data.get('tokenization_method') == 'cp_limb_v1'
     if is_cp_vocab:
-        idx2struct = vocab_data['idx2struct_token']
+        idx2type = vocab_data.get('idx2type_token', vocab_data['idx2struct_token'])
         idx2limb = vocab_data['idx2limb_token']
         idx2token = None
         remi_vocab = False
@@ -155,6 +178,10 @@ def prepare_dataset_with_difficulty(
         print(f"  {key}: {values}")
 
     os.makedirs(output_dir, exist_ok=True)
+
+    tokenization_method = 'cp_limb_v1' if is_cp_vocab else ('remi' if remi_vocab else 'standard')
+    metadata_path = write_dataset_tokenization_metadata(output_dir, tokenization_method)
+    print(f"Tokenization metadata saved to {metadata_path}")
 
     files = sorted([f for f in os.listdir(input_dir) if f.endswith('.pkl')])
     print(f"\nFound {len(files)} files to process")
@@ -192,7 +219,9 @@ def prepare_dataset_with_difficulty(
 
             for b in range(len(bar_pos) - 1):
                 st, ed = bar_pos[b], bar_pos[b + 1]
-                token_len = len(tokens['event_type']) if isinstance(tokens, dict) else len(tokens)
+                token_len = len(tokens['cp_type']) if isinstance(tokens, dict) and 'cp_type' in tokens else (
+                    len(tokens['event_type']) if isinstance(tokens, dict) and 'event_type' in tokens else len(tokens)
+                )
 
                 if st >= ed or ed > token_len:
                     # 不正な範囲の場合はデフォルト値を使用
@@ -206,15 +235,16 @@ def prepare_dataset_with_difficulty(
                 else:
                     if is_cp_vocab and isinstance(tokens, dict):
                         bar_cp_data = {
-                            'event_type': tokens['event_type'][st:ed],
-                            'struct_token': tokens['struct_token'][st:ed],
+                            'cp_type': tokens['cp_type'][st:ed] if 'cp_type' in tokens else None,
+                            'event_type': tokens['event_type'][st:ed] if 'event_type' in tokens else None,
+                            'struct_token': tokens['struct_token'][st:ed] if 'struct_token' in tokens else None,
                             'cp_pos': tokens['cp_pos'][st:ed],
                             'cp_hand1': tokens['cp_hand1'][st:ed],
                             'cp_hand2': tokens['cp_hand2'][st:ed],
                             'cp_right_foot': tokens['cp_right_foot'][st:ed],
                             'cp_left_foot': tokens['cp_left_foot'][st:ed],
                         }
-                        bar_tokens = cp_data_to_tokens(bar_cp_data, idx2struct, idx2limb)
+                        bar_tokens = cp_data_to_tokens(bar_cp_data, idx2type, idx2limb)
                     else:
                         bar_token_indices = tokens[st:ed]
                         if remi_vocab:
