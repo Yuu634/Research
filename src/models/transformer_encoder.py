@@ -23,9 +23,22 @@ class VAETransformerEncoder(nn.Module):
     self.fc_mu = nn.Linear(d_model, d_vae_latent)
     self.fc_logvar = nn.Linear(d_model, d_vae_latent)
 
-  def forward(self, x, padding_mask=None):
+  def forward(self, x, padding_mask=None, anchor_positions=None):
     out = self.tr_encoder(x, src_key_padding_mask=padding_mask)
-    hidden_out = out[0, :, :]
+
+    if anchor_positions is None:
+      hidden_out = out[0, :, :]
+    else:
+      anchor_positions = anchor_positions.to(out.device)
+      if anchor_positions.dim() != 1 or anchor_positions.size(0) != out.size(1):
+        raise ValueError(
+          f'anchor_positions must have shape ({out.size(1)},), got {tuple(anchor_positions.size())}'
+        )
+
+      anchor_positions = anchor_positions.clamp(min=0, max=out.size(0) - 1)
+      batch_idx = torch.arange(out.size(1), device=out.device)
+      hidden_out = out[anchor_positions, batch_idx, :]
+
     mu, logvar = self.fc_mu(hidden_out), self.fc_logvar(hidden_out)
 
     return hidden_out, mu, logvar

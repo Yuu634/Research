@@ -36,6 +36,48 @@ from scipy.stats import entropy
 import argparse
 
 
+def _safe_positive_int(value, default_value, field_name):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        print(f'[warning] Invalid {field_name}={value}. Falling back to {default_value}.')
+        return default_value
+
+    if parsed <= 0:
+        print(f'[warning] Non-positive {field_name}={parsed}. Falling back to {default_value}.')
+        return default_value
+
+    return parsed
+
+
+def _resolve_runtime_model_options(mconf, dset):
+    cond_mode = mconf.get('cond_mode', 'in-attn')
+    if cond_mode not in ('in-attn', 'pre-attn'):
+        print(f"[warning] Unsupported cond_mode={cond_mode}. Falling back to 'in-attn'.")
+        cond_mode = 'in-attn'
+
+    bar_anchor_mode = mconf.get('bar_anchor_mode', 'first_token')
+    if bar_anchor_mode not in ('first_token', 'bar_token'):
+        print(f"[warning] Unsupported bar_anchor_mode={bar_anchor_mode}. Falling back to 'first_token'.")
+        bar_anchor_mode = 'first_token'
+
+    bar_token_idx = getattr(dset, 'bar_token', None)
+    if bar_anchor_mode == 'bar_token' and bar_token_idx is None:
+        print("[warning] bar_anchor_mode=bar_token but bar token is unavailable. Falling back to first_token anchor.")
+        bar_anchor_mode = 'first_token'
+
+    return {
+        'cond_mode': cond_mode,
+        'bar_anchor_mode': bar_anchor_mode,
+        'bar_token_idx': bar_token_idx,
+        'use_hierarchical_pe': bool(mconf.get('use_hierarchical_pe', False)),
+        'hier_pe_bar_vocab_size': _safe_positive_int(mconf.get('hier_pe_bar_vocab_size', 512), 512, 'model.hier_pe_bar_vocab_size'),
+        'hier_pe_beat_vocab_size': _safe_positive_int(mconf.get('hier_pe_beat_vocab_size', 8), 8, 'model.hier_pe_beat_vocab_size'),
+        'hier_pe_pos_vocab_size': _safe_positive_int(mconf.get('hier_pe_pos_vocab_size', 32), 32, 'model.hier_pe_pos_vocab_size'),
+        'hier_pe_use_struct_bias': bool(mconf.get('hier_pe_use_struct_bias', True)),
+    }
+
+
 ###########################################
 # sampling utilities
 ###########################################
@@ -82,12 +124,20 @@ def get_latent_embedding_fast(model, piece_data, use_sampling=False, sampling_va
     # reshape
     batch_inp = piece_data['enc_input'].permute(1, 0).long().to(device)
     batch_padding_mask = piece_data['enc_padding_mask'].bool().to(device)
+    enc_bar_idx = piece_data['enc_bar_idx'].permute(1, 0).long().to(device) if 'enc_bar_idx' in piece_data else None
+    enc_beat_idx = piece_data['enc_beat_idx'].permute(1, 0).long().to(device) if 'enc_beat_idx' in piece_data else None
+    enc_pos_idx = piece_data['enc_pos_idx'].permute(1, 0).long().to(device) if 'enc_pos_idx' in piece_data else None
+    enc_is_struct = piece_data['enc_is_struct'].permute(1, 0).long().to(device) if 'enc_is_struct' in piece_data else None
 
     # get latent conditioning vectors
     with torch.no_grad():
         piece_latents = model.get_sampled_latent(
             batch_inp, padding_mask=batch_padding_mask,
-            use_sampling=use_sampling, sampling_var=sampling_var
+            use_sampling=use_sampling, sampling_var=sampling_var,
+            enc_bar_idx=enc_bar_idx,
+            enc_beat_idx=enc_beat_idx,
+            enc_pos_idx=enc_pos_idx,
+            enc_is_struct=enc_is_struct,
         )
 
     return piece_latents
@@ -359,6 +409,7 @@ Example:
     # モデル読み込み
     print('[info] Building model...')
     mconf = config['model']
+    runtime_opts = _resolve_runtime_model_options(mconf, dset)
     model = MuseMorphose(
         mconf['enc_n_layer'], mconf['enc_n_head'], mconf['enc_d_model'], mconf['enc_d_ff'],
         mconf['dec_n_layer'], mconf['dec_n_head'], mconf['dec_d_model'], mconf['dec_d_ff'],
@@ -370,7 +421,14 @@ Example:
         d_s_move_emb=mconf.get('d_s_move_emb', 32),
         use_difficulty=True,
         use_attr_cls=True,
-        cond_mode=mconf.get('cond_mode', 'in-attn')
+        cond_mode=runtime_opts['cond_mode'],
+        bar_anchor_mode=runtime_opts['bar_anchor_mode'],
+        bar_token_idx=runtime_opts['bar_token_idx'],
+        use_hierarchical_pe=runtime_opts['use_hierarchical_pe'],
+        hier_pe_bar_vocab_size=runtime_opts['hier_pe_bar_vocab_size'],
+        hier_pe_beat_vocab_size=runtime_opts['hier_pe_beat_vocab_size'],
+        hier_pe_pos_vocab_size=runtime_opts['hier_pe_pos_vocab_size'],
+        hier_pe_use_struct_bias=runtime_opts['hier_pe_use_struct_bias'],
     ).to(device)
 
     print(f'[info] Loading checkpoint from {ckpt_path}')

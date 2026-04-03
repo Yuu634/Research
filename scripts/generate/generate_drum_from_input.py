@@ -600,6 +600,16 @@ Example:
     # モデル構築
     print('[info] Building model...')
     mconf = config['model']
+    cond_mode = mconf.get('cond_mode', 'in-attn')
+    if cond_mode not in ('in-attn', 'pre-attn'):
+        print(f"[warning] Unsupported cond_mode={cond_mode}. Falling back to 'in-attn'.")
+        cond_mode = 'in-attn'
+
+    bar_anchor_mode = mconf.get('bar_anchor_mode', 'first_token')
+    if bar_anchor_mode not in ('first_token', 'bar_token'):
+        print(f"[warning] Unsupported bar_anchor_mode={bar_anchor_mode}. Falling back to 'first_token'.")
+        bar_anchor_mode = 'first_token'
+
     model = MuseMorphose(
         mconf['enc_n_layer'], mconf['enc_n_head'], mconf['enc_d_model'], mconf['enc_d_ff'],
         mconf['dec_n_layer'], mconf['dec_n_head'], mconf['dec_d_model'], mconf['dec_d_ff'],
@@ -611,7 +621,14 @@ Example:
         d_s_move_emb=mconf.get('d_s_move_emb', 32),
         use_difficulty=True,
         use_attr_cls=True,
-        cond_mode=mconf.get('cond_mode', 'in-attn')
+        cond_mode=cond_mode,
+        bar_anchor_mode=bar_anchor_mode,
+        bar_token_idx=tokenizer.token2idx.get('<BAR>', None),
+        use_hierarchical_pe=bool(mconf.get('use_hierarchical_pe', False)),
+        hier_pe_bar_vocab_size=max(1, int(mconf.get('hier_pe_bar_vocab_size', 512))),
+        hier_pe_beat_vocab_size=max(1, int(mconf.get('hier_pe_beat_vocab_size', 8))),
+        hier_pe_pos_vocab_size=max(1, int(mconf.get('hier_pe_pos_vocab_size', 32))),
+        hier_pe_use_struct_bias=bool(mconf.get('hier_pe_use_struct_bias', True)),
     ).to(device)
     
     print(f'[info] Loading model checkpoint from {model_path}')

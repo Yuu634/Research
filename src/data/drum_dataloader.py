@@ -10,6 +10,7 @@ from typing import List, Optional
 import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
+from src.utils.tokenization_policy import POSITIONS_PER_BEAT
 
 
 def pickle_load(path):
@@ -107,6 +108,7 @@ class DrumTransformerDataset(Dataset):
             self.idx2limb_token = vocab_payload['idx2limb_token']
 
             self.pos_pad_value = vocab_payload.get('pos_pad_value', 24)
+            self.positions_per_beat = int(vocab_payload.get('positions_per_beat', POSITIONS_PER_BEAT))
 
             self.cp_struct_event_idx = self.event_type2idx['STRUCT']
             self.cp_note_event_idx = self.event_type2idx['CP']
@@ -139,6 +141,7 @@ class DrumTransformerDataset(Dataset):
             self.eos_token = self.token2idx['<EOS>']
             self.pad_token = len(self.token2idx)  # PADトークンは語彙の末尾に追加
             self.vocab_size = self.pad_token + 1
+            self.positions_per_beat = POSITIONS_PER_BEAT
 
     def _piece_len(self, piece_evs):
         if isinstance(piece_evs, dict):
@@ -340,6 +343,143 @@ class DrumTransformerDataset(Dataset):
 
         return padded_enc_input, enc_padding_mask, enc_lens
 
+    def get_encoder_hier_input_data(self, bar_positions: np.ndarray, hier_seq: np.ndarray, pad_value: int = 0):
+        """階層インデックス用のエンコーダー入力データを生成"""
+        assert len(bar_positions) == self.model_max_bars + 1
+
+        padded_enc_hier = np.full(
+            (self.model_max_bars, self.model_enc_seqlen),
+            dtype=np.int32,
+            fill_value=pad_value
+        )
+
+        seq_len = len(hier_seq)
+        for b, (st, ed) in enumerate(zip(bar_positions[:-1], bar_positions[1:])):
+            st = max(0, min(int(st), seq_len))
+            ed = max(st, min(int(ed), seq_len))
+            if st >= ed:
+                continue
+
+            within_bar_vals = list(hier_seq[st:ed])
+            if len(within_bar_vals) < self.model_enc_seqlen:
+                within_bar_vals.extend([pad_value] * (self.model_enc_seqlen - len(within_bar_vals)))
+            padded_enc_hier[b, :] = np.array(within_bar_vals[:self.model_enc_seqlen], dtype=np.int32)
+
+        return padded_enc_hier
+
+    def _parse_beat_token(self, token: str):
+        if not isinstance(token, str):
+            return None
+        if token.startswith('<BEAT_') and token.endswith('>'):
+            try:
+                beat_idx = int(token[len('<BEAT_'):-1])
+                return max(1, min(4, beat_idx))
+            except ValueError:
+                return None
+        return None
+
+    def _parse_pos_token(self, token: str):
+        if not isinstance(token, str):
+            return None
+        if token.startswith('<POS_') and token.endswith('>'):
+            try:
+                pos_idx = int(token[len('<POS_'):-1])
+                return max(0, min(self.positions_per_beat - 1, pos_idx))
+            except ValueError:
+                return None
+        return None
+
+    def _build_bar_index_seq(self, seq_len: int, bar_positions: List[int]):
+        bar_idx_seq = np.zeros((seq_len,), dtype=np.int32)
+        for b, (st, ed) in enumerate(zip(bar_positions[:-1], bar_positions[1:])):
+            st = max(0, min(int(st), seq_len))
+            ed = max(st, min(int(ed), seq_len))
+            if st < ed:
+                bar_idx_seq[st:ed] = b
+        return bar_idx_seq
+
+    def _build_hier_indices_standard(self, token_seq: List[int], bar_positions: List[int]):
+        seq_len = len(token_seq)
+        bar_idx_seq = self._build_bar_index_seq(seq_len, bar_positions)
+        beat_idx_seq = np.ones((seq_len,), dtype=np.int32)
+        pos_idx_seq = np.zeros((seq_len,), dtype=np.int32)
+        is_struct_seq = np.zeros((seq_len,), dtype=np.int32)
+
+        for b, (st, ed) in enumerate(zip(bar_positions[:-1], bar_positions[1:])):
+            st = max(0, min(int(st), seq_len))
+            ed = max(st, min(int(ed), seq_len))
+            if st >= ed:
+                continue
+
+            current_beat = 1
+            current_pos = 0
+            for i in range(st, ed):
+                token = self.idx2token.get(int(token_seq[i]), '<PAD>')
+
+                if token == '<BAR>':
+                    current_beat = 1
+                    current_pos = 0
+
+                beat_token = self._parse_beat_token(token)
+                if beat_token is not None:
+                    current_beat = beat_token
+                    current_pos = 0
+
+                pos_token = self._parse_pos_token(token)
+                if pos_token is not None:
+                    current_pos = pos_token
+
+                beat_idx_seq[i] = current_beat
+                pos_idx_seq[i] = current_pos
+                is_struct_seq[i] = int(isinstance(token, str) and token.startswith('<') and token != '<PAD>')
+
+        return bar_idx_seq, beat_idx_seq, pos_idx_seq, is_struct_seq
+
+    def _build_hier_indices_cp(self, cp_type_seq: List[int], cp_pos_seq: List[int], bar_positions: List[int]):
+        seq_len = len(cp_type_seq)
+        bar_idx_seq = self._build_bar_index_seq(seq_len, bar_positions)
+        beat_idx_seq = np.ones((seq_len,), dtype=np.int32)
+        pos_idx_seq = np.zeros((seq_len,), dtype=np.int32)
+        is_struct_seq = np.zeros((seq_len,), dtype=np.int32)
+
+        ticks_per_beat = max(1, self.positions_per_beat // 4)
+
+        for b, (st, ed) in enumerate(zip(bar_positions[:-1], bar_positions[1:])):
+            st = max(0, min(int(st), seq_len))
+            ed = max(st, min(int(ed), seq_len))
+            if st >= ed:
+                continue
+
+            current_beat = 1
+            current_pos = 0
+            for i in range(st, ed):
+                cp_type = int(cp_type_seq[i])
+                cp_pos = int(cp_pos_seq[i]) if i < len(cp_pos_seq) else self.pos_pad_value
+                type_token = self.idx2type_token.get(cp_type, '<PAD>')
+
+                if type_token == '<BAR>':
+                    current_beat = 1
+                    current_pos = 0
+
+                beat_token = self._parse_beat_token(type_token)
+                if beat_token is not None:
+                    current_beat = beat_token
+                    current_pos = 0
+
+                pos_token = self._parse_pos_token(type_token)
+                if pos_token is not None:
+                    current_pos = pos_token
+
+                if cp_type == self.type_note_idx and 0 <= cp_pos < self.positions_per_beat:
+                    current_pos = cp_pos
+                    current_beat = max(1, min(4, (cp_pos // ticks_per_beat) + 1))
+
+                beat_idx_seq[i] = current_beat
+                pos_idx_seq[i] = current_pos
+                is_struct_seq[i] = int(cp_type != self.type_note_idx and type_token != '<PAD>')
+
+        return bar_idx_seq, beat_idx_seq, pos_idx_seq, is_struct_seq
+
     def __len__(self):
         return len(self.pieces)
 
@@ -363,6 +503,16 @@ class DrumTransformerDataset(Dataset):
             enc_inp, enc_padding_mask, enc_lens = self.get_encoder_input_data(
                 np.array(bar_pos), cp_type_seq
             )
+
+            enc_bar_idx_seq, enc_beat_idx_seq, enc_pos_idx_seq, enc_is_struct_seq = self._build_hier_indices_cp(
+                cp_type_seq,
+                bar_tokens['cp_pos'],
+                bar_pos,
+            )
+            enc_bar_idx = self.get_encoder_hier_input_data(np.array(bar_pos), enc_bar_idx_seq, pad_value=0)
+            enc_beat_idx = self.get_encoder_hier_input_data(np.array(bar_pos), enc_beat_idx_seq, pad_value=0)
+            enc_pos_idx = self.get_encoder_hier_input_data(np.array(bar_pos), enc_pos_idx_seq, pad_value=0)
+            enc_is_struct = self.get_encoder_hier_input_data(np.array(bar_pos), enc_is_struct_seq, pad_value=0)
 
             length = seq_len
 
@@ -406,15 +556,28 @@ class DrumTransformerDataset(Dataset):
             cp_event_id = self.cp_note_event_idx
             cp_mask = (event_inp == cp_event_id).astype(np.int32)
 
+            dec_bar_idx, _ = pad_and_shift(enc_bar_idx_seq, 0)
+            dec_beat_idx, _ = pad_and_shift(enc_beat_idx_seq, 0)
+            dec_pos_idx, _ = pad_and_shift(enc_pos_idx_seq, 0)
+            dec_is_struct, _ = pad_and_shift(enc_is_struct_seq, 0)
+
             result = {
                 'id': idx,
                 'piece_id': int(os.path.basename(self.pieces[idx]).replace('.pkl', '')),
                 'st_bar_id': st_bar,
                 'bar_pos': np.array(bar_pos, dtype=int),
                 'enc_input': enc_inp,
+                'enc_bar_idx': enc_bar_idx,
+                'enc_beat_idx': enc_beat_idx,
+                'enc_pos_idx': enc_pos_idx,
+                'enc_is_struct': enc_is_struct,
                 # 互換キー: 既存コードが dec_input/target を参照するため構造系列を入れる
                 'dec_input': struct_inp,
                 'dec_target': struct_tgt,
+                'dec_bar_idx': dec_bar_idx,
+                'dec_beat_idx': dec_beat_idx,
+                'dec_pos_idx': dec_pos_idx,
+                'dec_is_struct': dec_is_struct,
                 'length': min(length, self.model_dec_seqlen),
                 'enc_padding_mask': enc_padding_mask,
                 'enc_length': enc_lens,
@@ -450,6 +613,15 @@ class DrumTransformerDataset(Dataset):
                 np.array(bar_pos), bar_tokens
             )
 
+            enc_bar_idx_seq, enc_beat_idx_seq, enc_pos_idx_seq, enc_is_struct_seq = self._build_hier_indices_standard(
+                bar_tokens,
+                bar_pos,
+            )
+            enc_bar_idx = self.get_encoder_hier_input_data(np.array(bar_pos), enc_bar_idx_seq, pad_value=0)
+            enc_beat_idx = self.get_encoder_hier_input_data(np.array(bar_pos), enc_beat_idx_seq, pad_value=0)
+            enc_pos_idx = self.get_encoder_hier_input_data(np.array(bar_pos), enc_pos_idx_seq, pad_value=0)
+            enc_is_struct = self.get_encoder_hier_input_data(np.array(bar_pos), enc_is_struct_seq, pad_value=0)
+
             # デコーダー入力/ターゲットを生成
             length = len(bar_tokens)
             if self.pad_to_same:
@@ -465,14 +637,38 @@ class DrumTransformerDataset(Dataset):
             inp = np.array(inp[:-1], dtype=int)
             assert len(inp) == len(target)
 
+            if self.pad_to_same:
+                bar_hier = self.pad_sequence(enc_bar_idx_seq.tolist(), self.model_dec_seqlen + 1, pad_value=0)
+                beat_hier = self.pad_sequence(enc_beat_idx_seq.tolist(), self.model_dec_seqlen + 1, pad_value=0)
+                pos_hier = self.pad_sequence(enc_pos_idx_seq.tolist(), self.model_dec_seqlen + 1, pad_value=0)
+                struct_hier = self.pad_sequence(enc_is_struct_seq.tolist(), self.model_dec_seqlen + 1, pad_value=0)
+            else:
+                bar_hier = self.pad_sequence(enc_bar_idx_seq.tolist(), len(enc_bar_idx_seq) + 1, pad_value=0)
+                beat_hier = self.pad_sequence(enc_beat_idx_seq.tolist(), len(enc_beat_idx_seq) + 1, pad_value=0)
+                pos_hier = self.pad_sequence(enc_pos_idx_seq.tolist(), len(enc_pos_idx_seq) + 1, pad_value=0)
+                struct_hier = self.pad_sequence(enc_is_struct_seq.tolist(), len(enc_is_struct_seq) + 1, pad_value=0)
+
+            dec_bar_idx = np.array(bar_hier[:-1], dtype=np.int32)
+            dec_beat_idx = np.array(beat_hier[:-1], dtype=np.int32)
+            dec_pos_idx = np.array(pos_hier[:-1], dtype=np.int32)
+            dec_is_struct = np.array(struct_hier[:-1], dtype=np.int32)
+
             result = {
                 'id': idx,
                 'piece_id': int(os.path.basename(self.pieces[idx]).replace('.pkl', '')),
                 'st_bar_id': st_bar,
                 'bar_pos': np.array(bar_pos, dtype=int),
                 'enc_input': enc_inp,
+                'enc_bar_idx': enc_bar_idx,
+                'enc_beat_idx': enc_beat_idx,
+                'enc_pos_idx': enc_pos_idx,
+                'enc_is_struct': enc_is_struct,
                 'dec_input': inp[:self.model_dec_seqlen],
                 'dec_target': target[:self.model_dec_seqlen],
+                'dec_bar_idx': dec_bar_idx[:self.model_dec_seqlen],
+                'dec_beat_idx': dec_beat_idx[:self.model_dec_seqlen],
+                'dec_pos_idx': dec_pos_idx[:self.model_dec_seqlen],
+                'dec_is_struct': dec_is_struct[:self.model_dec_seqlen],
                 'length': min(length, self.model_dec_seqlen),
                 'enc_padding_mask': enc_padding_mask,
                 'enc_length': enc_lens,

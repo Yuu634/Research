@@ -3,7 +3,8 @@ from torch import nn
 import torch.nn.functional as F
 from src.models.transformer_encoder import VAETransformerEncoder
 from src.models.transformer_helpers import (
-  weights_init, PositionalEncoding, TokenEmbedding, CpCompositeEmbedding, generate_causal_mask
+  weights_init, PositionalEncoding, HierarchicalDrumPositionalEncoding,
+  TokenEmbedding, CpCompositeEmbedding, generate_causal_mask
 )
 
 class VAETransformerDecoder(nn.Module):
@@ -63,6 +64,7 @@ class MuseMorphose(nn.Module):
     use_difficulty=False,  # 難易度属性を使用するかどうか
     tokenization_method='standard',
     cp_event_type_vocab_size=3,
+    cp_type_vocab_size=None,
     cp_struct_vocab_size=None,
     cp_pos_vocab_size=25,
     cp_limb_vocab_size=2,
@@ -70,11 +72,19 @@ class MuseMorphose(nn.Module):
     cp_struct_pad_idx=0,
     cp_pos_pad_idx=24,
     cp_limb_pad_idx=0,
+    bar_anchor_mode='first_token',
+    bar_token_idx=None,
+    d_cp_type_emb=64,
     d_cp_pos_emb=64,
     d_cp_limb_emb=64,
     # ==============================================
     is_training=True, use_attr_cls=True,
-    cond_mode='in-attn'
+    cond_mode='in-attn',
+    use_hierarchical_pe=False,
+    hier_pe_bar_vocab_size=512,
+    hier_pe_beat_vocab_size=8,
+    hier_pe_pos_vocab_size=32,
+    hier_pe_use_struct_bias=True,
   ):
     super(MuseMorphose, self).__init__()
     self.enc_n_layer = enc_n_layer
@@ -101,6 +111,17 @@ class MuseMorphose(nn.Module):
     self.token_emb = TokenEmbedding(n_token, d_embed, enc_d_model)
     self.d_embed = d_embed
     self.pe = PositionalEncoding(d_embed)
+    self.use_hierarchical_pe = use_hierarchical_pe
+    if use_hierarchical_pe:
+      self.hier_pe = HierarchicalDrumPositionalEncoding(
+        d_embed=d_embed,
+        bar_vocab_size=hier_pe_bar_vocab_size,
+        beat_vocab_size=hier_pe_beat_vocab_size,
+        pos_vocab_size=hier_pe_pos_vocab_size,
+        use_struct_bias=hier_pe_use_struct_bias,
+      )
+    else:
+      self.hier_pe = None
     self.dec_out_proj = nn.Linear(dec_d_model, n_token)
     self.encoder = VAETransformerEncoder(
       enc_n_layer, enc_n_head, enc_d_model, enc_d_ff, d_vae_latent, enc_dropout, enc_activation
@@ -110,12 +131,20 @@ class MuseMorphose(nn.Module):
 
     self.cp_event_type_vocab_size = cp_event_type_vocab_size
     self.cp_struct_vocab_size = cp_struct_vocab_size if cp_struct_vocab_size is not None else n_token
+    self.cp_type_vocab_size = cp_type_vocab_size if cp_type_vocab_size is not None else self.cp_struct_vocab_size
     self.cp_pos_vocab_size = cp_pos_vocab_size
     self.cp_limb_vocab_size = cp_limb_vocab_size
     self.cp_event_pad_idx = cp_event_pad_idx
     self.cp_struct_pad_idx = cp_struct_pad_idx
     self.cp_pos_pad_idx = cp_pos_pad_idx
     self.cp_limb_pad_idx = cp_limb_pad_idx
+
+    if bar_anchor_mode not in ('first_token', 'bar_token'):
+      raise ValueError(
+        f'Invalid bar_anchor_mode: {bar_anchor_mode}. Supported: first_token, bar_token'
+      )
+    self.bar_anchor_mode = bar_anchor_mode
+    self.bar_token_idx = bar_token_idx
 
     # ===== 難易度属性を使用する場合 =====
     if use_attr_cls and use_difficulty:
@@ -186,8 +215,10 @@ class MuseMorphose(nn.Module):
     # ===== CP方式の埋め込み/出力ヘッド =====
     if self.tokenization_method == 'cp_limb_v1':
       self.cp_composite_emb = CpCompositeEmbedding(
+        n_type=self.cp_type_vocab_size,
         n_pos=self.cp_pos_vocab_size,
         n_limb_token=self.cp_limb_vocab_size,
+        d_type=d_cp_type_emb,
         d_pos=d_cp_pos_emb,
         d_limb=d_cp_limb_emb,
         d_proj=enc_d_model
@@ -221,21 +252,128 @@ class MuseMorphose(nn.Module):
 
     return eps * std + mu
 
-  def get_sampled_latent(self, inp, padding_mask=None, use_sampling=False, sampling_var=0.):
-    token_emb = self.token_emb(inp)
-    enc_inp = self.emb_dropout(token_emb) + self.pe(inp.size(0))
+  def _resolve_encoder_anchor_positions(self, enc_tokens_flat):
+    if self.bar_anchor_mode != 'bar_token' or self.bar_token_idx is None:
+      return None
 
-    _, mu, logvar = self.encoder(enc_inp, padding_mask=padding_mask)
+    bar_mask = enc_tokens_flat.eq(self.bar_token_idx)
+    match_counts = bar_mask.sum(dim=0)
+    has_unique_bar = match_counts.eq(1)
+
+    first_hit = torch.argmax(bar_mask.long(), dim=0)
+    anchor_positions = torch.zeros(enc_tokens_flat.size(1), dtype=torch.long, device=enc_tokens_flat.device)
+    anchor_positions[has_unique_bar] = first_hit[has_unique_bar]
+
+    return anchor_positions
+
+  def _flatten_hier_index_tensor(self, index_tensor):
+    if index_tensor is None:
+      return None
+    if index_tensor.dim() == 3:
+      return index_tensor.reshape(index_tensor.size(0), -1)
+    return index_tensor
+
+  def _build_position_encoding(self, seq_len, bar_idx=None, beat_idx=None, pos_idx=None, is_struct=None):
+    if (
+      self.use_hierarchical_pe and self.hier_pe is not None and
+      bar_idx is not None and beat_idx is not None and pos_idx is not None
+    ):
+      return self.hier_pe(bar_idx, beat_idx, pos_idx, is_struct=is_struct)
+
+    return self.pe(seq_len)
+
+  def get_sampled_latent(
+    self,
+    inp,
+    padding_mask=None,
+    use_sampling=False,
+    sampling_var=0.,
+    enc_bar_idx=None,
+    enc_beat_idx=None,
+    enc_pos_idx=None,
+    enc_is_struct=None,
+  ):
+    if inp.dim() == 3:
+      enc_tokens_flat = inp.reshape(inp.size(0), -1)
+      token_emb = self.token_emb(inp).reshape(inp.size(0), -1, self.enc_d_model)
+      if padding_mask is not None:
+        padding_mask = padding_mask.reshape(-1, padding_mask.size(-1))
+    else:
+      enc_tokens_flat = inp
+      token_emb = self.token_emb(inp)
+
+    enc_bar_idx = self._flatten_hier_index_tensor(enc_bar_idx)
+    enc_beat_idx = self._flatten_hier_index_tensor(enc_beat_idx)
+    enc_pos_idx = self._flatten_hier_index_tensor(enc_pos_idx)
+    enc_is_struct = self._flatten_hier_index_tensor(enc_is_struct)
+
+    enc_pe = self._build_position_encoding(
+      inp.size(0),
+      bar_idx=enc_bar_idx,
+      beat_idx=enc_beat_idx,
+      pos_idx=enc_pos_idx,
+      is_struct=enc_is_struct,
+    )
+    enc_inp = self.emb_dropout(token_emb) + enc_pe
+    enc_anchor_positions = self._resolve_encoder_anchor_positions(enc_tokens_flat)
+
+    _, mu, logvar = self.encoder(
+      enc_inp,
+      padding_mask=padding_mask,
+      anchor_positions=enc_anchor_positions,
+    )
     mu, logvar = mu.reshape(-1, mu.size(-1)), logvar.reshape(-1, mu.size(-1))
     vae_latent = self.reparameterize(mu, logvar, use_sampling=use_sampling, sampling_var=sampling_var)
 
     return vae_latent
 
+  def _build_decoder_input_emb(
+    self,
+    dec_inp,
+    cp_type_inp=None,
+    cp_struct_inp=None,
+    cp_pos_inp=None,
+    cp_hand1_inp=None,
+    cp_hand2_inp=None,
+    cp_right_foot_inp=None,
+    cp_left_foot_inp=None,
+  ):
+    if self.tokenization_method != 'cp_limb_v1':
+      return self.token_emb(dec_inp)
+
+    # Backward compatibility fallback: if cp_type is absent, use legacy structural input.
+    if cp_type_inp is None:
+      if cp_struct_inp is not None:
+        cp_type_inp = cp_struct_inp
+      else:
+        cp_type_inp = dec_inp
+
+    if cp_pos_inp is None:
+      cp_pos_inp = torch.full_like(cp_type_inp, self.cp_pos_pad_idx)
+    if cp_hand1_inp is None:
+      cp_hand1_inp = torch.full_like(cp_type_inp, self.cp_limb_pad_idx)
+    if cp_hand2_inp is None:
+      cp_hand2_inp = torch.full_like(cp_type_inp, self.cp_limb_pad_idx)
+    if cp_right_foot_inp is None:
+      cp_right_foot_inp = torch.full_like(cp_type_inp, self.cp_limb_pad_idx)
+    if cp_left_foot_inp is None:
+      cp_left_foot_inp = torch.full_like(cp_type_inp, self.cp_limb_pad_idx)
+
+    return self.cp_composite_emb(
+      cp_type_inp,
+      cp_pos_inp,
+      cp_hand1_inp,
+      cp_hand2_inp,
+      cp_right_foot_inp,
+      cp_left_foot_inp,
+    )
+
   def generate(self, inp, dec_seg_emb, rfreq_cls=None, polyph_cls=None,
                s_tech_cls=None, s_indep_cls=None, s_hand_cls=None, s_foot_cls=None, s_move_cls=None,
-               cp_event_type_inp=None, cp_struct_inp=None,
+               cp_event_type_inp=None, cp_type_inp=None, cp_struct_inp=None,
                cp_pos_inp=None, cp_hand1_inp=None, cp_hand2_inp=None,
                cp_right_foot_inp=None, cp_left_foot_inp=None,
+               dec_bar_idx=None, dec_beat_idx=None, dec_pos_idx=None, dec_is_struct=None,
                keep_last_only=True):
     dec_seg_emb_cat = self._build_conditional_seg_emb(
       dec_seg_emb,
@@ -249,20 +387,24 @@ class MuseMorphose(nn.Module):
     )
 
     if self.tokenization_method == 'cp_limb_v1':
-      if cp_event_type_inp is None:
-        raise ValueError('cp_event_type_inp is required when tokenization_method=cp_limb_v1')
-
-      if cp_struct_inp is None:
-        cp_struct_inp = inp
-
-      struct_token_emb = self.token_emb(cp_struct_inp)
-      cp_token_emb = self.cp_composite_emb(
-        cp_pos_inp, cp_hand1_inp, cp_hand2_inp, cp_right_foot_inp, cp_left_foot_inp
+      dec_token_emb = self._build_decoder_input_emb(
+        inp,
+        cp_type_inp=cp_type_inp,
+        cp_struct_inp=cp_struct_inp,
+        cp_pos_inp=cp_pos_inp,
+        cp_hand1_inp=cp_hand1_inp,
+        cp_hand2_inp=cp_hand2_inp,
+        cp_right_foot_inp=cp_right_foot_inp,
+        cp_left_foot_inp=cp_left_foot_inp,
       )
-
-      cp_mask = (cp_event_type_inp == 1).unsqueeze(-1)
-      dec_token_emb = torch.where(cp_mask, cp_token_emb, struct_token_emb)
-      dec_inp = self.emb_dropout(dec_token_emb) + self.pe(inp.size(0))
+      dec_pe = self._build_position_encoding(
+        inp.size(0),
+        bar_idx=dec_bar_idx,
+        beat_idx=dec_beat_idx,
+        pos_idx=dec_pos_idx,
+        is_struct=dec_is_struct,
+      )
+      dec_inp = self.emb_dropout(dec_token_emb) + dec_pe
 
       dec_out = self.decoder(dec_inp, dec_seg_emb_cat)
       cp_logits = {
@@ -280,7 +422,14 @@ class MuseMorphose(nn.Module):
       return cp_logits
 
     token_emb = self.token_emb(inp)
-    dec_inp = self.emb_dropout(token_emb) + self.pe(inp.size(0))
+    dec_pe = self._build_position_encoding(
+      inp.size(0),
+      bar_idx=dec_bar_idx,
+      beat_idx=dec_beat_idx,
+      pos_idx=dec_pos_idx,
+      is_struct=dec_is_struct,
+    )
+    dec_inp = self.emb_dropout(token_emb) + dec_pe
     out = self.decoder(dec_inp, dec_seg_emb_cat)
     out = self.dec_out_proj(out)
 
@@ -335,33 +484,66 @@ class MuseMorphose(nn.Module):
 
   def forward(self, enc_inp, dec_inp, dec_inp_bar_pos, rfreq_cls=None, polyph_cls=None,
               s_tech_cls=None, s_indep_cls=None, s_hand_cls=None, s_foot_cls=None, s_move_cls=None,
-              cp_event_type_inp=None, cp_struct_inp=None,
+              cp_event_type_inp=None, cp_type_inp=None, cp_struct_inp=None,
               cp_pos_inp=None, cp_hand1_inp=None, cp_hand2_inp=None,
               cp_right_foot_inp=None, cp_left_foot_inp=None,
+              enc_bar_idx=None, enc_beat_idx=None, enc_pos_idx=None, enc_is_struct=None,
+              dec_bar_idx=None, dec_beat_idx=None, dec_pos_idx=None, dec_is_struct=None,
               padding_mask=None):
     # [shape of enc_inp] (seqlen_per_bar, bsize, n_bars_per_sample)
     enc_bt_size, enc_n_bars = enc_inp.size(1), enc_inp.size(2)
+    enc_tokens_flat = enc_inp.reshape(enc_inp.size(0), -1)
     enc_token_emb = self.token_emb(enc_inp)
-
-    # [shape of dec_inp] (seqlen_per_sample, bsize)
-    # [shape of rfreq_cls & polyph_cls OR difficulty classes] same as above
-    # -- (should copy each bar's label to all corresponding indices)
-    dec_token_emb = self.token_emb(dec_inp)
 
     enc_token_emb = enc_token_emb.reshape(
       enc_inp.size(0), -1, enc_token_emb.size(-1)
     )
-    enc_inp = self.emb_dropout(enc_token_emb) + self.pe(enc_inp.size(0))
-    dec_inp = self.emb_dropout(dec_token_emb) + self.pe(dec_inp.size(0))
+    enc_bar_idx = self._flatten_hier_index_tensor(enc_bar_idx)
+    enc_beat_idx = self._flatten_hier_index_tensor(enc_beat_idx)
+    enc_pos_idx = self._flatten_hier_index_tensor(enc_pos_idx)
+    enc_is_struct = self._flatten_hier_index_tensor(enc_is_struct)
+
+    enc_pe = self._build_position_encoding(
+      enc_inp.size(0),
+      bar_idx=enc_bar_idx,
+      beat_idx=enc_beat_idx,
+      pos_idx=enc_pos_idx,
+      is_struct=enc_is_struct,
+    )
+    enc_inp = self.emb_dropout(enc_token_emb) + enc_pe
+
+    dec_token_emb = self._build_decoder_input_emb(
+      dec_inp,
+      cp_type_inp=cp_type_inp,
+      cp_struct_inp=cp_struct_inp,
+      cp_pos_inp=cp_pos_inp,
+      cp_hand1_inp=cp_hand1_inp,
+      cp_hand2_inp=cp_hand2_inp,
+      cp_right_foot_inp=cp_right_foot_inp,
+      cp_left_foot_inp=cp_left_foot_inp,
+    )
+    dec_pe = self._build_position_encoding(
+      dec_inp.size(0),
+      bar_idx=dec_bar_idx,
+      beat_idx=dec_beat_idx,
+      pos_idx=dec_pos_idx,
+      is_struct=dec_is_struct,
+    )
+    dec_inp_emb = self.emb_dropout(dec_token_emb) + dec_pe
 
     # [shape of padding_mask] (bsize, n_bars_per_sample, seqlen_per_bar)
     # -- should be `True` for padded indices (i.e., those >= seqlen of the bar), `False` otherwise
     if padding_mask is not None:
       padding_mask = padding_mask.reshape(-1, padding_mask.size(-1))
 
-    _, mu, logvar = self.encoder(enc_inp, padding_mask=padding_mask)
+    enc_anchor_positions = self._resolve_encoder_anchor_positions(enc_tokens_flat)
+    _, mu, logvar = self.encoder(
+      enc_inp,
+      padding_mask=padding_mask,
+      anchor_positions=enc_anchor_positions,
+    )
     vae_latent = self.reparameterize(mu, logvar)
-    dec_seg_emb = self._build_dec_seg_emb(dec_inp, dec_inp_bar_pos, vae_latent)
+    dec_seg_emb = self._build_dec_seg_emb(dec_inp_emb, dec_inp_bar_pos, vae_latent)
     dec_seg_emb_cat = self._build_conditional_seg_emb(
       dec_seg_emb,
       rfreq_cls=rfreq_cls,
@@ -374,21 +556,6 @@ class MuseMorphose(nn.Module):
     )
 
     if self.tokenization_method == 'cp_limb_v1':
-      if cp_struct_inp is None:
-        cp_struct_inp = dec_inp
-
-      if cp_event_type_inp is None:
-        raise ValueError('cp_event_type_inp is required when tokenization_method=cp_limb_v1')
-
-      struct_token_emb = self.token_emb(cp_struct_inp)
-      cp_token_emb = self.cp_composite_emb(
-        cp_pos_inp, cp_hand1_inp, cp_hand2_inp, cp_right_foot_inp, cp_left_foot_inp
-      )
-
-      cp_mask = (cp_event_type_inp == 1).unsqueeze(-1)
-      dec_token_emb = torch.where(cp_mask, cp_token_emb, struct_token_emb)
-      dec_inp_emb = self.emb_dropout(dec_token_emb) + self.pe(dec_inp.size(0))
-
       dec_out = self.decoder(dec_inp_emb, dec_seg_emb_cat)
       cp_logits = {
         'event_type': self.cp_event_type_head(dec_out),
@@ -401,7 +568,7 @@ class MuseMorphose(nn.Module):
       }
       return mu, logvar, cp_logits
 
-    dec_out = self.decoder(dec_inp, dec_seg_emb_cat)
+    dec_out = self.decoder(dec_inp_emb, dec_seg_emb_cat)
     dec_logits = self.dec_out_proj(dec_out)
 
     return mu, logvar, dec_logits

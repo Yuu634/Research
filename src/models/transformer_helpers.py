@@ -67,6 +67,54 @@ class PositionalEncoding(nn.Module):
 
         return pos_encoding
 
+class HierarchicalDrumPositionalEncoding(nn.Module):
+    def __init__(
+      self,
+      d_embed,
+      bar_vocab_size=512,
+      beat_vocab_size=8,
+      pos_vocab_size=32,
+      use_struct_bias=True,
+    ):
+      super(HierarchicalDrumPositionalEncoding, self).__init__()
+      self.d_embed = d_embed
+      self.bar_vocab_size = bar_vocab_size
+      self.beat_vocab_size = beat_vocab_size
+      self.pos_vocab_size = pos_vocab_size
+      self.use_struct_bias = use_struct_bias
+
+      self.bar_emb = nn.Embedding(bar_vocab_size, d_embed)
+      self.beat_emb = nn.Embedding(beat_vocab_size, d_embed)
+      self.pos_emb = nn.Embedding(pos_vocab_size, d_embed)
+
+      if use_struct_bias:
+        # 0: non-structural token, 1: structural token
+        self.struct_emb = nn.Embedding(2, d_embed)
+      else:
+        self.struct_emb = None
+
+    def _sanitize_index(self, idx, vocab_size):
+      return idx.long().clamp(min=0, max=vocab_size - 1)
+
+    def forward(self, bar_idx, beat_idx, pos_idx, is_struct=None):
+      if not (bar_idx.shape == beat_idx.shape == pos_idx.shape):
+        raise ValueError(
+          'bar_idx, beat_idx, and pos_idx must share the same shape. '
+          f'got {tuple(bar_idx.shape)}, {tuple(beat_idx.shape)}, {tuple(pos_idx.shape)}'
+        )
+
+      bar_ids = self._sanitize_index(bar_idx, self.bar_vocab_size)
+      beat_ids = self._sanitize_index(beat_idx, self.beat_vocab_size)
+      pos_ids = self._sanitize_index(pos_idx, self.pos_vocab_size)
+
+      pe = self.bar_emb(bar_ids) + self.beat_emb(beat_ids) + self.pos_emb(pos_ids)
+
+      if self.struct_emb is not None and is_struct is not None:
+        struct_ids = is_struct.long().clamp(min=0, max=1)
+        pe = pe + self.struct_emb(struct_ids)
+
+      return pe
+
 class TokenEmbedding(nn.Module):
   def __init__(self, n_token, d_embed, d_proj):
     super(TokenEmbedding, self).__init__()
@@ -94,31 +142,35 @@ class TokenEmbedding(nn.Module):
 class CpCompositeEmbedding(nn.Module):
   def __init__(
     self,
+    n_type,
     n_pos,
     n_limb_token,
+    d_type,
     d_pos,
     d_limb,
     d_proj
   ):
     super(CpCompositeEmbedding, self).__init__()
 
+    self.type_emb = nn.Embedding(n_type, d_type)
     self.pos_emb = nn.Embedding(n_pos, d_pos)
     self.hand1_emb = nn.Embedding(n_limb_token, d_limb)
     self.hand2_emb = nn.Embedding(n_limb_token, d_limb)
     self.rf_emb = nn.Embedding(n_limb_token, d_limb)
     self.lf_emb = nn.Embedding(n_limb_token, d_limb)
 
-    d_cat = d_pos + (d_limb * 4)
+    d_cat = d_type + d_pos + (d_limb * 4)
     self.proj = nn.Linear(d_cat, d_proj, bias=False)
     self.emb_scale = d_proj ** 0.5
 
-  def forward(self, pos, hand1, hand2, right_foot, left_foot):
+  def forward(self, type_token, pos, hand1, hand2, right_foot, left_foot):
+    type_e = self.type_emb(type_token)
     pos_e = self.pos_emb(pos)
     h1_e = self.hand1_emb(hand1)
     h2_e = self.hand2_emb(hand2)
     rf_e = self.rf_emb(right_foot)
     lf_e = self.lf_emb(left_foot)
 
-    cp_cat = torch.cat([pos_e, h1_e, h2_e, rf_e, lf_e], dim=-1)
+    cp_cat = torch.cat([type_e, pos_e, h1_e, h2_e, rf_e, lf_e], dim=-1)
     cp_proj = self.proj(cp_cat)
     return cp_proj.mul_(self.emb_scale)

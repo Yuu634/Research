@@ -63,6 +63,93 @@ def compute_loss_ema(ema, batch_loss, decay=0.95):
         return batch_loss * (1 - decay) + ema * decay
 
 
+def _safe_positive_int(value, default_value, field_name):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        print(f'[warning] Invalid {field_name}={value}. Falling back to {default_value}.')
+        return default_value
+
+    if parsed <= 0:
+        print(f'[warning] Non-positive {field_name}={parsed}. Falling back to {default_value}.')
+        return default_value
+
+    return parsed
+
+
+def _resolve_runtime_model_options(mconf, dset, tokenization_method):
+    cond_mode = mconf.get('cond_mode', 'in-attn')
+    if cond_mode not in ('in-attn', 'pre-attn'):
+        print(f"[warning] Unsupported cond_mode={cond_mode}. Falling back to 'in-attn'.")
+        cond_mode = 'in-attn'
+
+    bar_anchor_mode = mconf.get('bar_anchor_mode', 'first_token')
+    if bar_anchor_mode not in ('first_token', 'bar_token'):
+        print(f"[warning] Unsupported bar_anchor_mode={bar_anchor_mode}. Falling back to 'first_token'.")
+        bar_anchor_mode = 'first_token'
+
+    bar_token_idx = getattr(dset, 'bar_token', None)
+    if bar_anchor_mode == 'bar_token' and bar_token_idx is None:
+        print("[warning] bar_anchor_mode=bar_token but bar token is unavailable. Falling back to first_token anchor.")
+        bar_anchor_mode = 'first_token'
+
+    use_hierarchical_pe = bool(mconf.get('use_hierarchical_pe', False))
+    hier_pe_bar_vocab_size = _safe_positive_int(
+        mconf.get('hier_pe_bar_vocab_size', 512),
+        512,
+        'model.hier_pe_bar_vocab_size'
+    )
+    hier_pe_beat_vocab_size = _safe_positive_int(
+        mconf.get('hier_pe_beat_vocab_size', 8),
+        8,
+        'model.hier_pe_beat_vocab_size'
+    )
+    hier_pe_pos_vocab_size = _safe_positive_int(
+        mconf.get('hier_pe_pos_vocab_size', 32),
+        32,
+        'model.hier_pe_pos_vocab_size'
+    )
+
+    d_cp_type_emb = _safe_positive_int(
+        mconf.get('d_cp_type_emb', 64),
+        64,
+        'model.d_cp_type_emb'
+    )
+
+    if tokenization_method == 'cp_limb_v1' and not hasattr(dset, 'type_token2idx'):
+        raise ValueError(
+            'cp_limb_v1 mode requires CP-compatible vocab payload with type_token2idx. '
+            'Please regenerate vocab/dataset artifacts for cp_limb_v1.'
+        )
+
+    cp_type_vocab_size = len(getattr(dset, 'type_token2idx', getattr(dset, 'struct_token2idx', {})))
+    if cp_type_vocab_size <= 0:
+        cp_type_vocab_size = dset.vocab_size
+
+    return {
+        'cond_mode': cond_mode,
+        'bar_anchor_mode': bar_anchor_mode,
+        'bar_token_idx': bar_token_idx,
+        'use_hierarchical_pe': use_hierarchical_pe,
+        'hier_pe_bar_vocab_size': hier_pe_bar_vocab_size,
+        'hier_pe_beat_vocab_size': hier_pe_beat_vocab_size,
+        'hier_pe_pos_vocab_size': hier_pe_pos_vocab_size,
+        'hier_pe_use_struct_bias': bool(mconf.get('hier_pe_use_struct_bias', True)),
+        'd_cp_type_emb': d_cp_type_emb,
+        'cp_type_vocab_size': cp_type_vocab_size,
+    }
+
+
+def _load_state_dict_with_compat(model, state_dict, desc='checkpoint'):
+    try:
+        model.load_state_dict(state_dict)
+        print(f'[info] Loaded {desc} with strict=True')
+    except RuntimeError as e:
+        print(f'[warning] strict=True load failed for {desc}: {e}')
+        print(f'[warning] Retrying {desc} load with strict=False for backward compatibility.')
+        model.load_state_dict(state_dict, strict=False)
+
+
 def train_model(epoch, model, dloader, dloader_val, optim, sched, config, trained_steps, scaler=None, best_val_loss=float('inf')):
     """モデルの学習（1エポック）"""
     model.train()
@@ -107,8 +194,17 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
         batch_inp_bar_pos = batch_samples['bar_pos'].to(device)
         batch_inp_lens = batch_samples['length']
         batch_padding_mask = batch_samples['enc_padding_mask'].to(device)
+        enc_bar_idx = batch_samples['enc_bar_idx'].permute(2, 0, 1).to(device) if 'enc_bar_idx' in batch_samples else None
+        enc_beat_idx = batch_samples['enc_beat_idx'].permute(2, 0, 1).to(device) if 'enc_beat_idx' in batch_samples else None
+        enc_pos_idx = batch_samples['enc_pos_idx'].permute(2, 0, 1).to(device) if 'enc_pos_idx' in batch_samples else None
+        enc_is_struct = batch_samples['enc_is_struct'].permute(2, 0, 1).to(device) if 'enc_is_struct' in batch_samples else None
+        dec_bar_idx = batch_samples['dec_bar_idx'].permute(1, 0).to(device) if 'dec_bar_idx' in batch_samples else None
+        dec_beat_idx = batch_samples['dec_beat_idx'].permute(1, 0).to(device) if 'dec_beat_idx' in batch_samples else None
+        dec_pos_idx = batch_samples['dec_pos_idx'].permute(1, 0).to(device) if 'dec_pos_idx' in batch_samples else None
+        dec_is_struct = batch_samples['dec_is_struct'].permute(1, 0).to(device) if 'dec_is_struct' in batch_samples else None
 
         cp_event_type_inp = batch_samples['cp_event_type_input'].permute(1, 0).to(device) if tokenization_method == 'cp_limb_v1' else None
+        cp_type_inp = batch_samples['cp_type_input'].permute(1, 0).to(device) if tokenization_method == 'cp_limb_v1' else None
         cp_struct_inp = batch_samples['cp_struct_input'].permute(1, 0).to(device) if tokenization_method == 'cp_limb_v1' else None
         cp_pos_inp = batch_samples['cp_pos_input'].permute(1, 0).to(device) if tokenization_method == 'cp_limb_v1' else None
         cp_hand1_inp = batch_samples['cp_hand1_input'].permute(1, 0).to(device) if tokenization_method == 'cp_limb_v1' else None
@@ -149,12 +245,21 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                         s_foot_cls=s_foot_cls_seq,
                         s_move_cls=s_move_cls_seq,
                         cp_event_type_inp=cp_event_type_inp,
+                        cp_type_inp=cp_type_inp,
                         cp_struct_inp=cp_struct_inp,
                         cp_pos_inp=cp_pos_inp,
                         cp_hand1_inp=cp_hand1_inp,
                         cp_hand2_inp=cp_hand2_inp,
                         cp_right_foot_inp=cp_rf_inp,
                         cp_left_foot_inp=cp_lf_inp,
+                        enc_bar_idx=enc_bar_idx,
+                        enc_beat_idx=enc_beat_idx,
+                        enc_pos_idx=enc_pos_idx,
+                        enc_is_struct=enc_is_struct,
+                        dec_bar_idx=dec_bar_idx,
+                        dec_beat_idx=dec_beat_idx,
+                        dec_pos_idx=dec_pos_idx,
+                        dec_is_struct=dec_is_struct,
                         padding_mask=batch_padding_mask
                     )
                 else:
@@ -169,6 +274,14 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                         s_hand_cls=s_hand_cls_seq,
                         s_foot_cls=s_foot_cls_seq,
                         s_move_cls=s_move_cls_seq,
+                        enc_bar_idx=enc_bar_idx,
+                        enc_beat_idx=enc_beat_idx,
+                        enc_pos_idx=enc_pos_idx,
+                        enc_is_struct=enc_is_struct,
+                        dec_bar_idx=dec_bar_idx,
+                        dec_beat_idx=dec_beat_idx,
+                        dec_pos_idx=dec_pos_idx,
+                        dec_is_struct=dec_is_struct,
                         padding_mask=batch_padding_mask
                     )
 
@@ -228,12 +341,21 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                     s_foot_cls=s_foot_cls_seq,
                     s_move_cls=s_move_cls_seq,
                     cp_event_type_inp=cp_event_type_inp,
+                    cp_type_inp=cp_type_inp,
                     cp_struct_inp=cp_struct_inp,
                     cp_pos_inp=cp_pos_inp,
                     cp_hand1_inp=cp_hand1_inp,
                     cp_hand2_inp=cp_hand2_inp,
                     cp_right_foot_inp=cp_rf_inp,
                     cp_left_foot_inp=cp_lf_inp,
+                    enc_bar_idx=enc_bar_idx,
+                    enc_beat_idx=enc_beat_idx,
+                    enc_pos_idx=enc_pos_idx,
+                    enc_is_struct=enc_is_struct,
+                    dec_bar_idx=dec_bar_idx,
+                    dec_beat_idx=dec_beat_idx,
+                    dec_pos_idx=dec_pos_idx,
+                    dec_is_struct=dec_is_struct,
                     padding_mask=batch_padding_mask
                 )
             else:
@@ -248,6 +370,14 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                     s_hand_cls=s_hand_cls_seq,
                     s_foot_cls=s_foot_cls_seq,
                     s_move_cls=s_move_cls_seq,
+                    enc_bar_idx=enc_bar_idx,
+                    enc_beat_idx=enc_beat_idx,
+                    enc_pos_idx=enc_pos_idx,
+                    enc_is_struct=enc_is_struct,
+                    dec_bar_idx=dec_bar_idx,
+                    dec_beat_idx=dec_beat_idx,
+                    dec_pos_idx=dec_pos_idx,
+                    dec_is_struct=dec_is_struct,
                     padding_mask=batch_padding_mask
                 )
 
@@ -409,8 +539,17 @@ def validate(model, dloader, config, n_rounds=8):
                 batch_dec_tgt = batch_samples['dec_target'].permute(1, 0).to(device)
                 batch_inp_bar_pos = batch_samples['bar_pos'].to(device)
                 batch_padding_mask = batch_samples['enc_padding_mask'].to(device)
+                enc_bar_idx = batch_samples['enc_bar_idx'].permute(2, 0, 1).to(device) if 'enc_bar_idx' in batch_samples else None
+                enc_beat_idx = batch_samples['enc_beat_idx'].permute(2, 0, 1).to(device) if 'enc_beat_idx' in batch_samples else None
+                enc_pos_idx = batch_samples['enc_pos_idx'].permute(2, 0, 1).to(device) if 'enc_pos_idx' in batch_samples else None
+                enc_is_struct = batch_samples['enc_is_struct'].permute(2, 0, 1).to(device) if 'enc_is_struct' in batch_samples else None
+                dec_bar_idx = batch_samples['dec_bar_idx'].permute(1, 0).to(device) if 'dec_bar_idx' in batch_samples else None
+                dec_beat_idx = batch_samples['dec_beat_idx'].permute(1, 0).to(device) if 'dec_beat_idx' in batch_samples else None
+                dec_pos_idx = batch_samples['dec_pos_idx'].permute(1, 0).to(device) if 'dec_pos_idx' in batch_samples else None
+                dec_is_struct = batch_samples['dec_is_struct'].permute(1, 0).to(device) if 'dec_is_struct' in batch_samples else None
 
                 cp_event_type_inp = batch_samples['cp_event_type_input'].permute(1, 0).to(device) if tokenization_method == 'cp_limb_v1' else None
+                cp_type_inp = batch_samples['cp_type_input'].permute(1, 0).to(device) if tokenization_method == 'cp_limb_v1' else None
                 cp_struct_inp = batch_samples['cp_struct_input'].permute(1, 0).to(device) if tokenization_method == 'cp_limb_v1' else None
                 cp_pos_inp = batch_samples['cp_pos_input'].permute(1, 0).to(device) if tokenization_method == 'cp_limb_v1' else None
                 cp_hand1_inp = batch_samples['cp_hand1_input'].permute(1, 0).to(device) if tokenization_method == 'cp_limb_v1' else None
@@ -445,12 +584,21 @@ def validate(model, dloader, config, n_rounds=8):
                         s_foot_cls=s_foot_cls_seq,
                         s_move_cls=s_move_cls_seq,
                         cp_event_type_inp=cp_event_type_inp,
+                        cp_type_inp=cp_type_inp,
                         cp_struct_inp=cp_struct_inp,
                         cp_pos_inp=cp_pos_inp,
                         cp_hand1_inp=cp_hand1_inp,
                         cp_hand2_inp=cp_hand2_inp,
                         cp_right_foot_inp=cp_rf_inp,
                         cp_left_foot_inp=cp_lf_inp,
+                        enc_bar_idx=enc_bar_idx,
+                        enc_beat_idx=enc_beat_idx,
+                        enc_pos_idx=enc_pos_idx,
+                        enc_is_struct=enc_is_struct,
+                        dec_bar_idx=dec_bar_idx,
+                        dec_beat_idx=dec_beat_idx,
+                        dec_pos_idx=dec_pos_idx,
+                        dec_is_struct=dec_is_struct,
                         padding_mask=batch_padding_mask
                     )
                     losses = model.compute_cp_loss(
@@ -482,6 +630,14 @@ def validate(model, dloader, config, n_rounds=8):
                         s_hand_cls=s_hand_cls_seq,
                         s_foot_cls=s_foot_cls_seq,
                         s_move_cls=s_move_cls_seq,
+                        enc_bar_idx=enc_bar_idx,
+                        enc_beat_idx=enc_beat_idx,
+                        enc_pos_idx=enc_pos_idx,
+                        enc_is_struct=enc_is_struct,
+                        dec_bar_idx=dec_bar_idx,
+                        dec_beat_idx=dec_beat_idx,
+                        dec_pos_idx=dec_pos_idx,
+                        dec_is_struct=dec_is_struct,
                         padding_mask=batch_padding_mask
                     )
 
@@ -605,6 +761,7 @@ def main():
     # モデルを構築
     print('[info] Building model...')
     mconf = config['model']
+    runtime_opts = _resolve_runtime_model_options(mconf, dset, tokenization_method)
 
     # まずCPU上でモデルを構築
     model = MuseMorphose(
@@ -634,6 +791,7 @@ def main():
         use_difficulty=use_difficulty,
         tokenization_method=tokenization_method,
         cp_event_type_vocab_size=len(getattr(dset, 'event_type2idx', {'<PAD_EVENT>': 2})) if tokenization_method == 'cp_limb_v1' else 3,
+        cp_type_vocab_size=runtime_opts['cp_type_vocab_size'],
         cp_struct_vocab_size=dset.vocab_size,
         cp_pos_vocab_size=(getattr(dset, 'pos_pad_value', 24) + 1) if tokenization_method == 'cp_limb_v1' else 25,
         cp_limb_vocab_size=len(getattr(dset, 'limb_token2idx', {'<PAD>': 0})) if tokenization_method == 'cp_limb_v1' else 2,
@@ -641,9 +799,17 @@ def main():
         cp_struct_pad_idx=getattr(dset, 'struct_token2idx', {'<PAD>': 0}).get('<PAD>', 0) if tokenization_method == 'cp_limb_v1' else 0,
         cp_pos_pad_idx=getattr(dset, 'pos_pad_value', 24),
         cp_limb_pad_idx=getattr(dset, 'limb_token2idx', {'<PAD>': 0}).get('<PAD>', 0) if tokenization_method == 'cp_limb_v1' else 0,
+        bar_anchor_mode=runtime_opts['bar_anchor_mode'],
+        bar_token_idx=runtime_opts['bar_token_idx'],
+        d_cp_type_emb=runtime_opts['d_cp_type_emb'],
         d_cp_pos_emb=mconf.get('d_cp_pos_emb', 64),
         d_cp_limb_emb=mconf.get('d_cp_limb_emb', 64),
-        cond_mode=mconf.get('cond_mode', 'none')
+        cond_mode=runtime_opts['cond_mode'],
+        use_hierarchical_pe=runtime_opts['use_hierarchical_pe'],
+        hier_pe_bar_vocab_size=runtime_opts['hier_pe_bar_vocab_size'],
+        hier_pe_beat_vocab_size=runtime_opts['hier_pe_beat_vocab_size'],
+        hier_pe_pos_vocab_size=runtime_opts['hier_pe_pos_vocab_size'],
+        hier_pe_use_struct_bias=runtime_opts['hier_pe_use_struct_bias'],
     )
 
     # パラメータ数を計算
@@ -664,9 +830,10 @@ def main():
         print(f'[info] Loading pretrained params from {pretrained_params_path}')
         # デバイスを考慮してロード
         if device == 'cpu':
-            model.load_state_dict(torch.load(pretrained_params_path, map_location='cpu'))
+            pretrained_state = torch.load(pretrained_params_path, map_location='cpu')
         else:
-            model.load_state_dict(torch.load(pretrained_params_path))
+            pretrained_state = torch.load(pretrained_params_path)
+        _load_state_dict_with_compat(model, pretrained_state, desc='pretrained params')
 
     model.train()
 
