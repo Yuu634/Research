@@ -89,10 +89,14 @@ def compute_difficulty_bounds(data_dir, vocab_path, output_path, bpm=120.0):
         idx2token = None
         is_remi = False
     else:
-        _, idx2token = vocab_data
-        is_remi = _is_remi_vocab(idx2token)
-        idx2struct = None
-        idx2limb = None
+        # vocab_dataは辞書形式: {'tokenization_method', 'token2idx', 'idx2token'}
+        if isinstance(vocab_data, dict):
+            idx2token = vocab_data.get('idx2token', {})
+            is_remi = vocab_data.get('tokenization_method') == 'remi'
+        else:
+            # 後方互換性: 古いタプル形式 (token2idx, idx2token)
+            _, idx2token = vocab_data
+            is_remi = False
 
     all_scores = {
         's_tech': [],

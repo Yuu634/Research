@@ -18,11 +18,11 @@ import argparse
 # 親ディレクトリをパスに追加
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from drum_difficulty_calculator import (
+from src.data.drum_difficulty_calculator import (
     compute_all_difficulty_scores,
     discretize_difficulty_score
 )
-from drum_tokenizer import DRUM_NOTE_MAP
+from src.tokenizers.drum_tokenizer import DRUM_NOTE_MAP
 
 try:
     from src.utils.tokenization_mode import write_dataset_tokenization_metadata
@@ -165,8 +165,14 @@ def prepare_dataset_with_difficulty(
         idx2token = None
         remi_vocab = False
     else:
-        _, idx2token = vocab_data
-        remi_vocab = is_remi_vocab(idx2token)
+        # vocab_dataは辞書形式: {'tokenization_method', 'token2idx', 'idx2token'}
+        if isinstance(vocab_data, dict):
+            idx2token = vocab_data.get('idx2token', {})
+            remi_vocab = vocab_data.get('tokenization_method') == 'remi'
+        else:
+            # 後方互換性: 古いタプル形式 (token2idx, idx2token)
+            _, idx2token = vocab_data
+            remi_vocab = False
 
     # 境界値を読み込み
     print(f"Loading difficulty bounds from {difficulty_bounds_path}...")

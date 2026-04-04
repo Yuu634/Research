@@ -12,6 +12,8 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from src.utils.tokenization_policy import POSITIONS_PER_BEAT
 
+DIFFICULTY_KEYS = ('s_tech', 's_indep', 's_hand', 's_foot', 's_move')
+
 
 def pickle_load(path):
     """Pickleファイルを読み込み"""
@@ -276,32 +278,51 @@ class DrumTransformerDataset(Dataset):
                 piece_bar_pos[picked_st_bar: picked_st_bar + self.model_max_bars]
             ) - piece_bar_pos[picked_st_bar]
             n_bars = self.model_max_bars
-
-            # ===== 追加: 難易度クラスのトリミング =====
-            if difficulty_classes is not None and len(difficulty_classes) > 0:
-                difficulty_classes = difficulty_classes[picked_st_bar: picked_st_bar + self.model_max_bars]
-            # ========================================
+            selected_bar_count = self.model_max_bars
         else:
             picked_bar_pos = np.array(
                 piece_bar_pos + [piece_bar_pos[-1]] * (self.model_max_bars - len(piece_bar_pos))
             )
             n_bars = len(piece_bar_pos)
+            selected_bar_count = max(0, len(piece_bar_pos) - 1)
             assert len(picked_bar_pos) == self.model_max_bars
 
-        # ===== 追加: 難易度クラスのパディング =====
+        # ===== 追加: 難易度クラスの検証・整列 =====
         if self.use_difficulty:
-            if difficulty_classes is not None and len(difficulty_classes) > 0:
-                if len(difficulty_classes) < self.model_max_bars:
-                    # パディング（最後の値を複製）
-                    last_diff = difficulty_classes[-1]
-                    difficulty_classes = difficulty_classes + [last_diff] * (
-                        self.model_max_bars - len(difficulty_classes)
+            if difficulty_classes is None:
+                raise ValueError(
+                    f'Difficulty labels are required when use_difficulty=True: piece={self.pieces[piece_idx]}'
+                )
+
+            difficulty_classes = list(difficulty_classes)
+            if picked_st_bar > 0 or len(piece_bar_pos) > self.model_max_bars:
+                difficulty_classes = difficulty_classes[picked_st_bar: picked_st_bar + selected_bar_count]
+
+            if len(difficulty_classes) != selected_bar_count:
+                raise ValueError(
+                    'Difficulty/bar count mismatch: '
+                    f'piece={self.pieces[piece_idx]}, expected_bars={selected_bar_count}, '
+                    f'difficulty_labels={len(difficulty_classes)}'
+                )
+
+            normalized_difficulty = []
+            for bar_idx, diff in enumerate(difficulty_classes):
+                if not isinstance(diff, dict):
+                    raise ValueError(
+                        'Difficulty label format mismatch: '
+                        f'piece={self.pieces[piece_idx]}, bar={bar_idx}, type={type(diff).__name__}'
                     )
-            else:
-                # 難易度クラスがない場合はゼロで埋める
-                difficulty_classes = [
-                    {'s_tech': 0, 's_indep': 0, 's_hand': 0, 's_foot': 0, 's_move': 0}
-                ] * self.model_max_bars
+
+                missing_keys = [k for k in DIFFICULTY_KEYS if k not in diff]
+                if missing_keys:
+                    raise ValueError(
+                        'Difficulty label keys mismatch: '
+                        f'piece={self.pieces[piece_idx]}, bar={bar_idx}, missing={missing_keys}'
+                    )
+
+                normalized_difficulty.append({k: int(diff[k]) for k in DIFFICULTY_KEYS})
+
+            difficulty_classes = normalized_difficulty
         else:
             difficulty_classes = None
         # ==========================================

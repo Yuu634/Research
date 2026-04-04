@@ -79,6 +79,62 @@ class MuseMorphoseHierarchicalCompatTests(unittest.TestCase):
             hier_pe_pos_vocab_size=32,
         )
 
+    def _build_standard_difficulty_model(self, tokenization_method="standard"):
+        return MuseMorphose(
+            enc_n_layer=1,
+            enc_n_head=2,
+            enc_d_model=8,
+            enc_d_ff=16,
+            dec_n_layer=1,
+            dec_n_head=2,
+            dec_d_model=8,
+            dec_d_ff=16,
+            d_vae_latent=4,
+            d_embed=8,
+            n_token=32,
+            enc_dropout=0.0,
+            dec_dropout=0.0,
+            tokenization_method=tokenization_method,
+            use_attr_cls=True,
+            use_difficulty=True,
+            cond_mode="in-attn",
+            use_hierarchical_pe=False,
+        )
+
+    def _build_cp_difficulty_model(self):
+        return MuseMorphose(
+            enc_n_layer=1,
+            enc_n_head=2,
+            enc_d_model=8,
+            enc_d_ff=16,
+            dec_n_layer=1,
+            dec_n_head=2,
+            dec_d_model=8,
+            dec_d_ff=16,
+            d_vae_latent=4,
+            d_embed=8,
+            n_token=16,
+            enc_dropout=0.0,
+            dec_dropout=0.0,
+            tokenization_method="cp_limb_v1",
+            use_attr_cls=True,
+            use_difficulty=True,
+            cond_mode="in-attn",
+            cp_event_type_vocab_size=3,
+            cp_type_vocab_size=16,
+            cp_struct_vocab_size=16,
+            cp_pos_vocab_size=25,
+            cp_limb_vocab_size=8,
+            cp_event_pad_idx=2,
+            cp_struct_pad_idx=0,
+            cp_pos_pad_idx=24,
+            cp_limb_pad_idx=0,
+            d_cp_type_emb=4,
+            d_cp_pos_emb=2,
+            d_cp_limb_emb=1,
+            use_hierarchical_pe=False,
+        )
+
     def _make_bar_pos(self, batch_size=2, dec_len=8, n_bars=2):
         if n_bars != 2:
             raise ValueError("This helper currently assumes n_bars=2")
@@ -310,6 +366,94 @@ class MuseMorphoseHierarchicalCompatTests(unittest.TestCase):
         )
 
         self.assertTrue(torch.allclose(emb_legacy, emb_explicit, atol=1e-6))
+
+    def test_standard_forward_raises_when_difficulty_inputs_missing(self):
+        model = self._build_standard_difficulty_model(tokenization_method="standard")
+
+        enc_len, dec_len, bsz, n_bars = 4, 8, 2, 2
+        enc_inp = torch.randint(0, 32, (enc_len, bsz, n_bars), dtype=torch.long)
+        dec_inp = torch.randint(0, 32, (dec_len, bsz), dtype=torch.long)
+        bar_pos = self._make_bar_pos(batch_size=bsz, dec_len=dec_len, n_bars=n_bars)
+        padding_mask = torch.zeros((bsz, n_bars, enc_len), dtype=torch.bool)
+
+        with self.assertRaises(ValueError):
+            model(
+                enc_inp,
+                dec_inp,
+                bar_pos,
+                padding_mask=padding_mask,
+            )
+
+    def test_cp_forward_raises_when_difficulty_inputs_missing(self):
+        model = self._build_cp_difficulty_model()
+
+        enc_len, dec_len, bsz, n_bars = 4, 8, 2, 2
+        enc_inp = torch.randint(0, 16, (enc_len, bsz, n_bars), dtype=torch.long)
+        dec_inp = torch.randint(0, 16, (dec_len, bsz), dtype=torch.long)
+        bar_pos = self._make_bar_pos(batch_size=bsz, dec_len=dec_len, n_bars=n_bars)
+        padding_mask = torch.zeros((bsz, n_bars, enc_len), dtype=torch.bool)
+
+        cp_event_type_inp = torch.randint(0, 2, (dec_len, bsz), dtype=torch.long)
+        cp_type_inp = torch.randint(0, 16, (dec_len, bsz), dtype=torch.long)
+        cp_struct_inp = torch.randint(0, 16, (dec_len, bsz), dtype=torch.long)
+        cp_pos_inp = torch.randint(0, 25, (dec_len, bsz), dtype=torch.long)
+        cp_h1_inp = torch.randint(0, 8, (dec_len, bsz), dtype=torch.long)
+        cp_h2_inp = torch.randint(0, 8, (dec_len, bsz), dtype=torch.long)
+        cp_rf_inp = torch.randint(0, 8, (dec_len, bsz), dtype=torch.long)
+        cp_lf_inp = torch.randint(0, 8, (dec_len, bsz), dtype=torch.long)
+
+        with self.assertRaises(ValueError):
+            model(
+                enc_inp,
+                dec_inp,
+                bar_pos,
+                cp_event_type_inp=cp_event_type_inp,
+                cp_type_inp=cp_type_inp,
+                cp_struct_inp=cp_struct_inp,
+                cp_pos_inp=cp_pos_inp,
+                cp_hand1_inp=cp_h1_inp,
+                cp_hand2_inp=cp_h2_inp,
+                cp_right_foot_inp=cp_rf_inp,
+                cp_left_foot_inp=cp_lf_inp,
+                padding_mask=padding_mask,
+            )
+
+    def test_cp_loss_excludes_structural_head_from_total(self):
+        torch.manual_seed(123)
+        model = self._build_cp_model(use_hierarchical_pe=False)
+
+        seq_len, bsz = 6, 2
+        mu = torch.zeros((bsz * 2, model.d_vae_latent), dtype=torch.float32)
+        logvar = torch.zeros_like(mu)
+
+        cp_logits = {
+            'event_type': torch.randn(seq_len, bsz, model.cp_event_type_vocab_size),
+            'structural': torch.randn(seq_len, bsz, model.cp_struct_vocab_size),
+            'cp_pos': torch.randn(seq_len, bsz, model.cp_pos_vocab_size),
+            'cp_hand1': torch.randn(seq_len, bsz, model.cp_limb_vocab_size),
+            'cp_hand2': torch.randn(seq_len, bsz, model.cp_limb_vocab_size),
+            'cp_right_foot': torch.randn(seq_len, bsz, model.cp_limb_vocab_size),
+            'cp_left_foot': torch.randn(seq_len, bsz, model.cp_limb_vocab_size),
+        }
+
+        event_tgt = torch.randint(0, 2, (seq_len, bsz), dtype=torch.long)
+        cp_targets_a = {
+            'event_type': event_tgt,
+            'structural': torch.randint(0, model.cp_struct_vocab_size, (seq_len, bsz), dtype=torch.long),
+            'cp_pos': torch.randint(0, model.cp_pos_vocab_size, (seq_len, bsz), dtype=torch.long),
+            'cp_hand1': torch.randint(0, model.cp_limb_vocab_size, (seq_len, bsz), dtype=torch.long),
+            'cp_hand2': torch.randint(0, model.cp_limb_vocab_size, (seq_len, bsz), dtype=torch.long),
+            'cp_right_foot': torch.randint(0, model.cp_limb_vocab_size, (seq_len, bsz), dtype=torch.long),
+            'cp_left_foot': torch.randint(0, model.cp_limb_vocab_size, (seq_len, bsz), dtype=torch.long),
+        }
+        cp_targets_b = dict(cp_targets_a)
+        cp_targets_b['structural'] = torch.randint(0, model.cp_struct_vocab_size, (seq_len, bsz), dtype=torch.long)
+
+        losses_a = model.compute_cp_loss(mu, logvar, beta=0.0, fb_lambda=0.0, cp_logits=cp_logits, cp_targets=cp_targets_a)
+        losses_b = model.compute_cp_loss(mu, logvar, beta=0.0, fb_lambda=0.0, cp_logits=cp_logits, cp_targets=cp_targets_b)
+
+        self.assertTrue(torch.allclose(losses_a['total_loss'], losses_b['total_loss'], atol=1e-6))
+        self.assertFalse(torch.allclose(losses_a['cp_structural_loss'], losses_b['cp_structural_loss'], atol=1e-6))
 
 
 if __name__ == "__main__":

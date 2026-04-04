@@ -128,6 +128,8 @@ class MuseMorphose(nn.Module):
     )
 
     self.use_attr_cls = use_attr_cls
+    if self.use_difficulty and not self.use_attr_cls:
+      raise ValueError('use_difficulty=True requires use_attr_cls=True for conditional embedding composition.')
 
     self.cp_event_type_vocab_size = cp_event_type_vocab_size
     self.cp_struct_vocab_size = cp_struct_vocab_size if cp_struct_vocab_size is not None else n_token
@@ -461,9 +463,24 @@ class MuseMorphose(nn.Module):
     s_foot_cls=None,
     s_move_cls=None
   ):
-    if (self.use_difficulty and s_tech_cls is not None and s_indep_cls is not None and
-        s_hand_cls is not None and s_foot_cls is not None and s_move_cls is not None and
-        self.use_attr_cls):
+    if self.use_difficulty:
+      missing_inputs = []
+      if s_tech_cls is None:
+        missing_inputs.append('s_tech_cls')
+      if s_indep_cls is None:
+        missing_inputs.append('s_indep_cls')
+      if s_hand_cls is None:
+        missing_inputs.append('s_hand_cls')
+      if s_foot_cls is None:
+        missing_inputs.append('s_foot_cls')
+      if s_move_cls is None:
+        missing_inputs.append('s_move_cls')
+
+      if missing_inputs:
+        raise ValueError(
+          'Difficulty conditioning is enabled but required class sequences are missing: '
+          f'{missing_inputs}'
+        )
 
       s_tech_emb = self.s_tech_attr_emb(s_tech_cls)
       s_indep_emb = self.s_indep_attr_emb(s_indep_cls)
@@ -574,6 +591,22 @@ class MuseMorphose(nn.Module):
     return mu, logvar, dec_logits
 
   def compute_loss(self, mu, logvar, beta, fb_lambda, dec_logits, dec_tgt):
+    if dec_logits.dim() != 3:
+      raise ValueError(
+        'Loss shape mismatch: dec_logits must be 3D [seq_len, batch, vocab]. '
+        f'Got shape={tuple(dec_logits.shape)}'
+      )
+    if dec_tgt.dim() != 2:
+      raise ValueError(
+        'Loss shape mismatch: dec_tgt must be 2D [seq_len, batch]. '
+        f'Got shape={tuple(dec_tgt.shape)}'
+      )
+    if dec_logits.size(0) != dec_tgt.size(0) or dec_logits.size(1) != dec_tgt.size(1):
+      raise ValueError(
+        'Loss shape mismatch between logits and target: '
+        f'logits={tuple(dec_logits.shape)}, target={tuple(dec_tgt.shape)}'
+      )
+
     recons_loss = F.cross_entropy(
       dec_logits.reshape(-1, dec_logits.size(-1)), dec_tgt.contiguous().reshape(-1), 
       ignore_index=self.n_token - 1, reduction='mean'
@@ -618,6 +651,47 @@ class MuseMorphose(nn.Module):
     if loss_weights is None:
       loss_weights = {}
 
+    required_keys = (
+      'event_type',
+      'structural',
+      'cp_pos',
+      'cp_hand1',
+      'cp_hand2',
+      'cp_right_foot',
+      'cp_left_foot',
+    )
+    missing_logits = [key for key in required_keys if key not in cp_logits]
+    if missing_logits:
+      raise ValueError(
+        'CP loss input mismatch: missing cp_logits keys '
+        f'{missing_logits}. Required={required_keys}'
+      )
+    missing_targets = [key for key in required_keys if key not in cp_targets]
+    if missing_targets:
+      raise ValueError(
+        'CP loss input mismatch: missing cp_targets keys '
+        f'{missing_targets}. Required={required_keys}'
+      )
+
+    for key in required_keys:
+      logits = cp_logits[key]
+      targets = cp_targets[key]
+      if logits.dim() != 3:
+        raise ValueError(
+          f'CP loss shape mismatch: cp_logits[{key}] must be 3D [seq_len, batch, vocab], '
+          f'got shape={tuple(logits.shape)}'
+        )
+      if targets.dim() != 2:
+        raise ValueError(
+          f'CP loss shape mismatch: cp_targets[{key}] must be 2D [seq_len, batch], '
+          f'got shape={tuple(targets.shape)}'
+        )
+      if logits.size(0) != targets.size(0) or logits.size(1) != targets.size(1):
+        raise ValueError(
+          f'CP loss shape mismatch for head={key}: '
+          f'logits={tuple(logits.shape)}, target={tuple(targets.shape)}'
+        )
+
     event_tgt = cp_targets['event_type']
     struct_tgt = cp_targets['structural']
     pos_tgt = cp_targets['cp_pos']
@@ -638,9 +712,10 @@ class MuseMorphose(nn.Module):
     loss_rf = self._masked_ce(cp_logits['cp_right_foot'], rf_tgt, cp_mask)
     loss_lf = self._masked_ce(cp_logits['cp_left_foot'], lf_tgt, cp_mask)
 
+    # Structural head is kept for observability/backward-compat metrics,
+    # but excluded from optimization to keep 6-head CP loss semantics.
     recons_loss = (
       loss_weights.get('event_type', 1.0) * loss_event +
-      loss_weights.get('structural', 1.0) * loss_struct +
       loss_weights.get('cp_pos', 1.0) * loss_pos +
       loss_weights.get('cp_hand1', 1.0) * loss_h1 +
       loss_weights.get('cp_hand2', 1.0) * loss_h2 +

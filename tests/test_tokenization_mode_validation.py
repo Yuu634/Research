@@ -10,6 +10,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.utils.tokenization_mode import (
+    CP_REQUIRED_BATCH_KEYS,
+    ensure_batch_mode_consistency,
     TOKENIZATION_METADATA_FILENAME,
     ensure_runtime_mode_compatibility,
     read_dataset_tokenization_metadata,
@@ -122,6 +124,29 @@ class TokenizationModeValidationTests(unittest.TestCase):
             self.assertEqual(metadata["tokenization_method"], "remi")
             self.assertEqual(metadata["input_scope"], "drum_only")
             self.assertEqual(metadata["non_drum_tracks_policy"], "excluded")
+
+    def test_ensure_batch_mode_consistency_accepts_cp_payload(self):
+        cp_batch = {key: [] for key in CP_REQUIRED_BATCH_KEYS}
+        ensure_batch_mode_consistency("cp_limb_v1", cp_batch)
+
+    def test_ensure_batch_mode_consistency_rejects_missing_cp_keys(self):
+        cp_batch = {
+            "cp_event_type_input": [],
+            "cp_event_type_target": [],
+            "cp_type_input": [],
+        }
+        with self.assertRaises(ValueError):
+            ensure_batch_mode_consistency("cp_limb_v1", cp_batch)
+
+    def test_ensure_batch_mode_consistency_rejects_cp_keys_in_standard_mode(self):
+        standard_batch = {
+            "enc_input": [],
+            "dec_input": [],
+            "dec_target": [],
+            "cp_type_input": [],
+        }
+        with self.assertRaises(ValueError):
+            ensure_batch_mode_consistency("standard", standard_batch)
 
 
 if __name__ == "__main__":

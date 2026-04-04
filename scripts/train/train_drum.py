@@ -4,11 +4,13 @@
 import sys
 import os
 import time
+import json
 
 from src.models.musemorphose import MuseMorphose
 from src.data.drum_dataloader import DrumTransformerDataset
 from torch.utils.data import DataLoader
 from src.utils.tokenization_mode import (
+    ensure_batch_mode_consistency,
     ensure_runtime_mode_compatibility,
     resolve_artifact_tokenization_method,
     validate_tokenization_method,
@@ -116,11 +118,20 @@ def _resolve_runtime_model_options(mconf, dset, tokenization_method):
         'model.d_cp_type_emb'
     )
 
-    if tokenization_method == 'cp_limb_v1' and not hasattr(dset, 'type_token2idx'):
-        raise ValueError(
-            'cp_limb_v1 mode requires CP-compatible vocab payload with type_token2idx. '
-            'Please regenerate vocab/dataset artifacts for cp_limb_v1.'
+    if tokenization_method == 'cp_limb_v1':
+        required_cp_attrs = (
+            'type_token2idx',
+            'event_type2idx',
+            'limb_token2idx',
+            'pos_pad_value',
         )
+        missing_cp_attrs = [attr for attr in required_cp_attrs if not hasattr(dset, attr)]
+        if missing_cp_attrs:
+            raise ValueError(
+                'cp_limb_v1 mode requires CP-compatible vocab/artifacts. '
+                f'Missing keys: {missing_cp_attrs}. '
+                'Please regenerate vocab/dataset artifacts for cp_limb_v1.'
+            )
 
     cp_type_vocab_size = len(getattr(dset, 'type_token2idx', getattr(dset, 'struct_token2idx', {})))
     if cp_type_vocab_size <= 0:
@@ -138,6 +149,121 @@ def _resolve_runtime_model_options(mconf, dset, tokenization_method):
         'd_cp_type_emb': d_cp_type_emb,
         'cp_type_vocab_size': cp_type_vocab_size,
     }
+
+
+def _ensure_difficulty_batch_contract(batch_samples, context):
+    required_keys = (
+        's_tech_cls_seq',
+        's_indep_cls_seq',
+        's_hand_cls_seq',
+        's_foot_cls_seq',
+        's_move_cls_seq',
+    )
+    missing = [key for key in required_keys if key not in batch_samples]
+    if missing:
+        raise ValueError(
+            'Difficulty conditioning batch mismatch: '
+            f'context={context}, missing_keys={missing}'
+        )
+
+
+def _shape_or_none(value):
+    if torch.is_tensor(value):
+        return list(value.shape)
+    return None
+
+
+def _append_jsonl(log_path, payload):
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + '\n')
+
+
+def _log_mode_loss_metrics(ckpt_dir, epoch, trained_steps, tokenization_method, losses):
+    payload = {
+        'epoch': int(epoch),
+        'step': int(trained_steps),
+        'mode': tokenization_method,
+        'total_loss': float(losses['total_loss'].item()),
+        'recons_loss': float(losses['recons_loss'].item()),
+        'kldiv_loss': float(losses['kldiv_loss'].item()),
+        'kldiv_raw': float(losses['kldiv_raw'].item()),
+    }
+    if tokenization_method == 'cp_limb_v1':
+        payload.update({
+            'cp_event_type_loss': float(losses['cp_event_type_loss'].item()),
+            'cp_structural_loss': float(losses['cp_structural_loss'].item()),
+            'cp_pos_loss': float(losses['cp_pos_loss'].item()),
+            'cp_hand1_loss': float(losses['cp_hand1_loss'].item()),
+            'cp_hand2_loss': float(losses['cp_hand2_loss'].item()),
+            'cp_right_foot_loss': float(losses['cp_right_foot_loss'].item()),
+            'cp_left_foot_loss': float(losses['cp_left_foot_loss'].item()),
+        })
+
+    _append_jsonl(os.path.join(ckpt_dir, 'loss_metrics.jsonl'), payload)
+
+
+def _log_loss_failure(ckpt_dir, epoch, trained_steps, batch_idx, tokenization_method, error, shape_context):
+    payload = {
+        'epoch': int(epoch),
+        'step': int(trained_steps),
+        'batch_idx': int(batch_idx),
+        'mode': tokenization_method,
+        'error_type': type(error).__name__,
+        'error': str(error),
+        'shape_context': shape_context,
+    }
+    _append_jsonl(os.path.join(ckpt_dir, 'loss_failures.jsonl'), payload)
+
+
+def _validate_training_config(config):
+    required_sections = ('data', 'model', 'training')
+    missing_sections = [section for section in required_sections if section not in config]
+    if missing_sections:
+        raise ValueError(
+            f'Config sections are missing: {missing_sections}. Required: {required_sections}.'
+        )
+
+    tokenization_method = validate_tokenization_method(
+        config['data'].get('tokenization_method', 'standard'),
+        context='data.tokenization_method'
+    )
+    config['data']['tokenization_method'] = tokenization_method
+
+    use_difficulty = bool(config['model'].get('use_difficulty', False))
+    config['model']['use_difficulty'] = use_difficulty
+
+    use_attr_cls = bool(config['model'].get('use_attr_cls', True))
+    if use_difficulty and not use_attr_cls:
+        raise ValueError(
+            'Invalid config combination: model.use_difficulty=true requires model.use_attr_cls=true '
+            'because difficulty conditions are composed as decoder attributes.'
+        )
+
+    cp_loss_weights = config['model'].get('cp_loss_weights', {})
+    if cp_loss_weights is None:
+        cp_loss_weights = {}
+        config['model']['cp_loss_weights'] = cp_loss_weights
+    if not isinstance(cp_loss_weights, dict):
+        raise ValueError(
+            'Invalid config: model.cp_loss_weights must be a mapping (dict) of head_name -> weight.'
+        )
+
+    if tokenization_method != 'cp_limb_v1' and cp_loss_weights:
+        print('[warning] model.cp_loss_weights is set but mode is not cp_limb_v1. The weights will be ignored.')
+
+    if tokenization_method == 'cp_limb_v1' and 'structural' in cp_loss_weights:
+        print('[warning] cp_loss_weights.structural is ignored because CP optimization uses structural-excluded 6-head loss.')
+
+    if not config['data'].get('vocab_path'):
+        raise ValueError('Invalid config: data.vocab_path must be provided.')
+    if not config['data'].get('data_dir'):
+        raise ValueError('Invalid config: data.data_dir must be provided.')
+
+    if not config['training'].get('ckpt_dir'):
+        raise ValueError('Invalid config: training.ckpt_dir must be provided.')
+
+    return config
 
 
 def _load_state_dict_with_compat(model, state_dict, desc='checkpoint'):
@@ -186,6 +312,16 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
     st = time.time()
 
     for batch_idx, batch_samples in enumerate(dloader):
+        ensure_batch_mode_consistency(
+            tokenization_method,
+            batch_samples,
+            context=f'train epoch={epoch} batch={batch_idx}',
+        )
+        if use_difficulty:
+            _ensure_difficulty_batch_contract(
+                batch_samples,
+                context=f'train epoch={epoch} batch={batch_idx}',
+            )
         model.zero_grad()
 
         batch_enc_inp = batch_samples['enc_input'].permute(2, 0, 1).to(device)
@@ -292,25 +428,60 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                     kl_beta = kl_max_beta
 
                 if tokenization_method == 'cp_limb_v1':
-                    losses = model.compute_cp_loss(
-                        mu,
-                        logvar,
-                        kl_beta,
-                        free_bit_lambda,
-                        cp_logits,
-                        {
-                            'event_type': cp_event_type_tgt,
-                            'structural': cp_struct_tgt,
-                            'cp_pos': cp_pos_tgt,
-                            'cp_hand1': cp_hand1_tgt,
-                            'cp_hand2': cp_hand2_tgt,
-                            'cp_right_foot': cp_rf_tgt,
-                            'cp_left_foot': cp_lf_tgt,
-                        },
-                        loss_weights=cp_loss_weights
-                    )
+                    try:
+                        losses = model.compute_cp_loss(
+                            mu,
+                            logvar,
+                            kl_beta,
+                            free_bit_lambda,
+                            cp_logits,
+                            {
+                                'event_type': cp_event_type_tgt,
+                                'structural': cp_struct_tgt,
+                                'cp_pos': cp_pos_tgt,
+                                'cp_hand1': cp_hand1_tgt,
+                                'cp_hand2': cp_hand2_tgt,
+                                'cp_right_foot': cp_rf_tgt,
+                                'cp_left_foot': cp_lf_tgt,
+                            },
+                            loss_weights=cp_loss_weights
+                        )
+                    except Exception as e:
+                        _log_loss_failure(
+                            ckpt_dir,
+                            epoch,
+                            trained_steps,
+                            batch_idx,
+                            tokenization_method,
+                            e,
+                            {
+                                'cp_event_type_target': _shape_or_none(cp_event_type_tgt),
+                                'cp_struct_target': _shape_or_none(cp_struct_tgt),
+                                'cp_pos_target': _shape_or_none(cp_pos_tgt),
+                                'cp_hand1_target': _shape_or_none(cp_hand1_tgt),
+                                'cp_hand2_target': _shape_or_none(cp_hand2_tgt),
+                                'cp_right_foot_target': _shape_or_none(cp_rf_tgt),
+                                'cp_left_foot_target': _shape_or_none(cp_lf_tgt),
+                            }
+                        )
+                        raise
                 else:
-                    losses = model.compute_loss(mu, logvar, kl_beta, free_bit_lambda, dec_logits, batch_dec_tgt)
+                    try:
+                        losses = model.compute_loss(mu, logvar, kl_beta, free_bit_lambda, dec_logits, batch_dec_tgt)
+                    except Exception as e:
+                        _log_loss_failure(
+                            ckpt_dir,
+                            epoch,
+                            trained_steps,
+                            batch_idx,
+                            tokenization_method,
+                            e,
+                            {
+                                'dec_logits': _shape_or_none(dec_logits),
+                                'dec_target': _shape_or_none(batch_dec_tgt),
+                            }
+                        )
+                        raise
 
             # 学習率のアニーリング
             if trained_steps < lr_warmup_steps:
@@ -388,25 +559,60 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                 kl_beta = kl_max_beta
 
             if tokenization_method == 'cp_limb_v1':
-                losses = model.compute_cp_loss(
-                    mu,
-                    logvar,
-                    kl_beta,
-                    free_bit_lambda,
-                    cp_logits,
-                    {
-                        'event_type': cp_event_type_tgt,
-                        'structural': cp_struct_tgt,
-                        'cp_pos': cp_pos_tgt,
-                        'cp_hand1': cp_hand1_tgt,
-                        'cp_hand2': cp_hand2_tgt,
-                        'cp_right_foot': cp_rf_tgt,
-                        'cp_left_foot': cp_lf_tgt,
-                    },
-                    loss_weights=cp_loss_weights
-                )
+                try:
+                    losses = model.compute_cp_loss(
+                        mu,
+                        logvar,
+                        kl_beta,
+                        free_bit_lambda,
+                        cp_logits,
+                        {
+                            'event_type': cp_event_type_tgt,
+                            'structural': cp_struct_tgt,
+                            'cp_pos': cp_pos_tgt,
+                            'cp_hand1': cp_hand1_tgt,
+                            'cp_hand2': cp_hand2_tgt,
+                            'cp_right_foot': cp_rf_tgt,
+                            'cp_left_foot': cp_lf_tgt,
+                        },
+                        loss_weights=cp_loss_weights
+                    )
+                except Exception as e:
+                    _log_loss_failure(
+                        ckpt_dir,
+                        epoch,
+                        trained_steps,
+                        batch_idx,
+                        tokenization_method,
+                        e,
+                        {
+                            'cp_event_type_target': _shape_or_none(cp_event_type_tgt),
+                            'cp_struct_target': _shape_or_none(cp_struct_tgt),
+                            'cp_pos_target': _shape_or_none(cp_pos_tgt),
+                            'cp_hand1_target': _shape_or_none(cp_hand1_tgt),
+                            'cp_hand2_target': _shape_or_none(cp_hand2_tgt),
+                            'cp_right_foot_target': _shape_or_none(cp_rf_tgt),
+                            'cp_left_foot_target': _shape_or_none(cp_lf_tgt),
+                        }
+                    )
+                    raise
             else:
-                losses = model.compute_loss(mu, logvar, kl_beta, free_bit_lambda, dec_logits, batch_dec_tgt)
+                try:
+                    losses = model.compute_loss(mu, logvar, kl_beta, free_bit_lambda, dec_logits, batch_dec_tgt)
+                except Exception as e:
+                    _log_loss_failure(
+                        ckpt_dir,
+                        epoch,
+                        trained_steps,
+                        batch_idx,
+                        tokenization_method,
+                        e,
+                        {
+                            'dec_logits': _shape_or_none(dec_logits),
+                            'dec_target': _shape_or_none(batch_dec_tgt),
+                        }
+                    )
+                    raise
 
             # 学習率のアニーリング
             if trained_steps < lr_warmup_steps:
@@ -456,6 +662,13 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                 os.path.join(ckpt_dir, 'log.txt'),
                 log_data,
                 is_init=not os.path.exists(os.path.join(ckpt_dir, 'log.txt'))
+            )
+            _log_mode_loss_metrics(
+                ckpt_dir,
+                epoch,
+                trained_steps,
+                tokenization_method,
+                losses,
             )
 
         # 検証
@@ -532,6 +745,16 @@ def validate(model, dloader, config, n_rounds=8):
             print(f'[round {i+1}]')
 
             for batch_idx, batch_samples in enumerate(dloader):
+                ensure_batch_mode_consistency(
+                    tokenization_method,
+                    batch_samples,
+                    context=f'validate round={i + 1} batch={batch_idx}',
+                )
+                if use_difficulty:
+                    _ensure_difficulty_batch_contract(
+                        batch_samples,
+                        context=f'validate round={i + 1} batch={batch_idx}',
+                    )
                 model.zero_grad()
 
                 batch_enc_inp = batch_samples['enc_input'].permute(2, 0, 1).to(device)
@@ -660,11 +883,8 @@ def main():
 
     # 設定を読み込み
     config = yaml.load(open(args.config, 'r'), Loader=yaml.FullLoader)
-    tokenization_method = validate_tokenization_method(
-        config['data'].get('tokenization_method', 'standard'),
-        context='data.tokenization_method'
-    )
-    config['data']['tokenization_method'] = tokenization_method
+    config = _validate_training_config(config)
+    tokenization_method = config['data']['tokenization_method']
     use_difficulty = config['model'].get('use_difficulty', False)
 
     ensure_runtime_mode_compatibility(

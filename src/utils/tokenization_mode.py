@@ -5,6 +5,24 @@ from typing import Any, Dict, Optional, Tuple
 
 SUPPORTED_TOKENIZATION_METHODS = ("standard", "remi", "cp_limb_v1")
 TOKENIZATION_METADATA_FILENAME = "tokenization_metadata.json"
+CP_REQUIRED_BATCH_KEYS = (
+    "cp_event_type_input",
+    "cp_event_type_target",
+    "cp_type_input",
+    "cp_type_target",
+    "cp_struct_input",
+    "cp_struct_target",
+    "cp_pos_input",
+    "cp_pos_target",
+    "cp_hand1_input",
+    "cp_hand1_target",
+    "cp_hand2_input",
+    "cp_hand2_target",
+    "cp_right_foot_input",
+    "cp_right_foot_target",
+    "cp_left_foot_input",
+    "cp_left_foot_target",
+)
 
 
 def supported_modes_for_display() -> str:
@@ -149,3 +167,34 @@ def ensure_runtime_mode_compatibility(
         )
 
     return mode
+
+
+def ensure_batch_mode_consistency(
+    requested_mode: str,
+    batch_samples: Any,
+    context: str = "batch",
+) -> None:
+    mode = validate_tokenization_method(requested_mode, context="data.tokenization_method")
+
+    if not isinstance(batch_samples, dict):
+        raise ValueError(
+            f"Invalid {context}: expected dict-like batch payload, got {type(batch_samples).__name__}."
+        )
+
+    key_set = set(batch_samples.keys())
+    cp_keys_in_batch = sorted(key for key in key_set if key.startswith("cp_"))
+
+    if mode == "cp_limb_v1":
+        missing_keys = [key for key in CP_REQUIRED_BATCH_KEYS if key not in key_set]
+        if missing_keys:
+            raise ValueError(
+                "Tokenization batch mismatch: requested=cp_limb_v1 but CP keys are missing. "
+                f"context={context}, missing={missing_keys}."
+            )
+        return
+
+    if cp_keys_in_batch:
+        raise ValueError(
+            "Tokenization batch mismatch: CP keys detected in non-CP mode. "
+            f"requested={mode}, context={context}, cp_keys={cp_keys_in_batch}."
+        )
