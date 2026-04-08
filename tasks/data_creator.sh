@@ -1,4 +1,4 @@
-for TOKENIZATION_METHOD in "standard" "remi" "cp_limb_v1"; do
+for TOKENIZATION_METHOD in "remi" "cp_limb_v1"; do
     echo "=== トークン化手法: ${TOKENIZATION_METHOD} ==="
     
     echo "=== 変数設定 ==="

@@ -983,6 +983,30 @@ def main():
     mconf = config['model']
     runtime_opts = _resolve_runtime_model_options(mconf, dset, tokenization_method)
 
+    resolved_n_s_tech_cls = mconf.get('n_s_tech_cls', 8)
+    resolved_n_s_indep_cls = mconf.get('n_s_indep_cls', 8)
+    resolved_n_s_hand_cls = mconf.get('n_s_hand_cls', 8)
+    resolved_n_s_foot_cls = mconf.get('n_s_foot_cls', 8)
+    resolved_n_s_move_cls = mconf.get('n_s_move_cls', 8)
+
+    if use_difficulty:
+        dataset_cls = getattr(dset, 'difficulty_num_classes', {})
+        resolved_n_s_tech_cls = max(resolved_n_s_tech_cls, int(dataset_cls.get('s_tech', resolved_n_s_tech_cls)))
+        resolved_n_s_indep_cls = max(resolved_n_s_indep_cls, int(dataset_cls.get('s_indep', resolved_n_s_indep_cls)))
+        resolved_n_s_hand_cls = max(resolved_n_s_hand_cls, int(dataset_cls.get('s_hand', resolved_n_s_hand_cls)))
+        resolved_n_s_foot_cls = max(resolved_n_s_foot_cls, int(dataset_cls.get('s_foot', resolved_n_s_foot_cls)))
+        resolved_n_s_move_cls = max(resolved_n_s_move_cls, int(dataset_cls.get('s_move', resolved_n_s_move_cls)))
+
+        pad_label = getattr(dset, 'difficulty_pad_label', {})
+        print('[info] Difficulty padding labels: '
+              f"tech={pad_label.get('s_tech')}, indep={pad_label.get('s_indep')}, "
+              f"hand={pad_label.get('s_hand')}, foot={pad_label.get('s_foot')}, "
+              f"move={pad_label.get('s_move')}")
+        print('[info] Difficulty class sizes (including PAD): '
+              f'tech={resolved_n_s_tech_cls}, indep={resolved_n_s_indep_cls}, '
+              f'hand={resolved_n_s_hand_cls}, foot={resolved_n_s_foot_cls}, '
+              f'move={resolved_n_s_move_cls}')
+
     # まずCPU上でモデルを構築
     model = MuseMorphose(
         mconf['enc_n_layer'],
@@ -1003,11 +1027,11 @@ def main():
         d_s_hand_emb=mconf.get('d_s_hand_emb', 32),
         d_s_foot_emb=mconf.get('d_s_foot_emb', 32),
         d_s_move_emb=mconf.get('d_s_move_emb', 32),
-        n_s_tech_cls=mconf.get('n_s_tech_cls', 8),
-        n_s_indep_cls=mconf.get('n_s_indep_cls', 8),
-        n_s_hand_cls=mconf.get('n_s_hand_cls', 8),
-        n_s_foot_cls=mconf.get('n_s_foot_cls', 8),
-        n_s_move_cls=mconf.get('n_s_move_cls', 8),
+        n_s_tech_cls=resolved_n_s_tech_cls,
+        n_s_indep_cls=resolved_n_s_indep_cls,
+        n_s_hand_cls=resolved_n_s_hand_cls,
+        n_s_foot_cls=resolved_n_s_foot_cls,
+        n_s_move_cls=resolved_n_s_move_cls,
         use_difficulty=use_difficulty,
         tokenization_method=tokenization_method,
         cp_event_type_vocab_size=len(getattr(dset, 'event_type2idx', {'<PAD_EVENT>': 2})) if tokenization_method == 'cp_limb_v1' else 3,

@@ -358,7 +358,7 @@ def main():
                         help='Path to difficulty bounds pickle file')
     parser.add_argument('output_dir', type=str,
                         help='Output directory for difficulty-labeled data')
-    parser.add_argument('--bpm', type=float, default=120.0,
+    parser.add_argument('bpm', type=float, nargs='?', default=120.0,
                         help='Default BPM (default: 120.0)')
     parser.add_argument('--train_ratio', type=float, default=0.9,
                         help='Ratio of training data (default: 0.9)')

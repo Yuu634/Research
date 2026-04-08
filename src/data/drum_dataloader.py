@@ -13,6 +13,7 @@ from torch.utils.data import Dataset, DataLoader
 from src.utils.tokenization_policy import POSITIONS_PER_BEAT
 
 DIFFICULTY_KEYS = ('s_tech', 's_indep', 's_hand', 's_foot', 's_move')
+DEFAULT_DIFFICULTY_CLASS_COUNT = 8
 
 
 def pickle_load(path):
@@ -55,6 +56,12 @@ class DrumTransformerDataset(Dataset):
 
         self.data_dir = data_dir
         self.pieces = pieces
+
+        # 難易度ラベル統計（special PADラベル生成のため）
+        self._difficulty_max_label = {k: -1 for k in DIFFICULTY_KEYS}
+        self.difficulty_pad_label = {k: DEFAULT_DIFFICULTY_CLASS_COUNT for k in DIFFICULTY_KEYS}
+        self.difficulty_num_classes = {k: DEFAULT_DIFFICULTY_CLASS_COUNT + 1 for k in DIFFICULTY_KEYS}
+
         self.build_dataset()
 
         self.model_enc_seqlen = model_enc_seqlen
@@ -145,6 +152,113 @@ class DrumTransformerDataset(Dataset):
             self.vocab_size = self.pad_token + 1
             self.positions_per_beat = POSITIONS_PER_BEAT
 
+    def _update_difficulty_label_stats(self, difficulty_classes):
+        if difficulty_classes is None:
+            return
+        for diff in difficulty_classes:
+            if not isinstance(diff, dict):
+                continue
+            for k in DIFFICULTY_KEYS:
+                if k not in diff:
+                    continue
+                try:
+                    label_val = int(diff[k])
+                except (TypeError, ValueError):
+                    continue
+                if label_val > self._difficulty_max_label[k]:
+                    self._difficulty_max_label[k] = label_val
+
+    def _finalize_difficulty_padding_scheme(self):
+        for k in DIFFICULTY_KEYS:
+            max_label = self._difficulty_max_label.get(k, -1)
+            if max_label >= 0:
+                self.difficulty_pad_label[k] = max_label + 1
+                self.difficulty_num_classes[k] = max_label + 2
+            else:
+                self.difficulty_pad_label[k] = DEFAULT_DIFFICULTY_CLASS_COUNT
+                self.difficulty_num_classes[k] = DEFAULT_DIFFICULTY_CLASS_COUNT + 1
+
+        # 参照しやすい互換属性
+        self.n_s_tech_cls = self.difficulty_num_classes['s_tech']
+        self.n_s_indep_cls = self.difficulty_num_classes['s_indep']
+        self.n_s_hand_cls = self.difficulty_num_classes['s_hand']
+        self.n_s_foot_cls = self.difficulty_num_classes['s_foot']
+        self.n_s_move_cls = self.difficulty_num_classes['s_move']
+
+    def _make_difficulty_pad_label(self):
+        return {k: int(self.difficulty_pad_label[k]) for k in DIFFICULTY_KEYS}
+
+    def _normalize_difficulty_labels(self, difficulty_classes, target_len, piece_path):
+        normalized_difficulty = []
+        for bar_idx, diff in enumerate(difficulty_classes):
+            if not isinstance(diff, dict):
+                raise ValueError(
+                    'Difficulty label format mismatch: '
+                    f'piece={piece_path}, bar={bar_idx}, type={type(diff).__name__}'
+                )
+
+            missing_keys = [k for k in DIFFICULTY_KEYS if k not in diff]
+            if missing_keys:
+                raise ValueError(
+                    'Difficulty label keys mismatch: '
+                    f'piece={piece_path}, bar={bar_idx}, missing={missing_keys}'
+                )
+
+            normalized_difficulty.append({k: int(diff[k]) for k in DIFFICULTY_KEYS})
+
+        if len(normalized_difficulty) > target_len:
+            normalized_difficulty = normalized_difficulty[:target_len]
+        elif len(normalized_difficulty) < target_len:
+            pad_label = self._make_difficulty_pad_label()
+            normalized_difficulty.extend([dict(pad_label) for _ in range(target_len - len(normalized_difficulty))])
+
+        return normalized_difficulty
+
+    def _append_pad_to_sequence(self, seq, pad_value, n_pad):
+        if n_pad <= 0:
+            return seq
+
+        if isinstance(seq, np.ndarray):
+            return np.concatenate([
+                seq,
+                np.full((n_pad,), pad_value, dtype=seq.dtype)
+            ])
+
+        seq = list(seq)
+        seq.extend([pad_value] * n_pad)
+        return seq
+
+    def _get_pad_token_for_key(self, key):
+        if self.tokenization_method != 'cp_limb_v1':
+            return self.pad_token
+
+        limb_pad = self.limb_token2idx.get('<PAD>', 0)
+        if key in ('cp_type', 'struct_token', 'cp_struct', 'type_token'):
+            return self.type_pad_idx
+        if key == 'event_type':
+            return self.cp_event_pad_idx
+        if key == 'cp_pos':
+            return self.pos_pad_value
+        if key in ('cp_hand1', 'cp_hand2', 'cp_right_foot', 'cp_left_foot', 'limb_token'):
+            return limb_pad
+        return self.type_pad_idx
+
+    def _append_bar_padding_tokens(self, piece_evs, n_pad_bars):
+        if n_pad_bars <= 0:
+            return piece_evs
+
+        if isinstance(piece_evs, dict):
+            padded_piece_evs = {}
+            for key, seq in piece_evs.items():
+                padded_piece_evs[key] = self._append_pad_to_sequence(
+                    seq,
+                    self._get_pad_token_for_key(key),
+                    n_pad_bars,
+                )
+            return padded_piece_evs
+
+        return self._append_pad_to_sequence(piece_evs, self.pad_token, n_pad_bars)
+
     def _piece_len(self, piece_evs):
         if isinstance(piece_evs, dict):
             if 'cp_type' in piece_evs:
@@ -216,12 +330,15 @@ class DrumTransformerDataset(Dataset):
                 # データ形式を確認（2要素または3要素タプル）
                 if len(data) == 2:
                     bar_pos, p_evs = data
+                    difficulty_classes = None
                 elif len(data) == 3:
-                    bar_pos, p_evs, _ = data
+                    bar_pos, p_evs, difficulty_classes = data
                 else:
                     print(f'Error loading {p}: Unknown data format')
                     self.piece_bar_pos.append([0])
                     continue
+
+                self._update_difficulty_label_stats(difficulty_classes)
 
                 # 最後の小節位置を調整
                 p_len = self._piece_len(p_evs)
@@ -239,6 +356,8 @@ class DrumTransformerDataset(Dataset):
             except Exception as e:
                 print(f'Error loading {p}: {e}')
                 self.piece_bar_pos.append([0])
+
+        self._finalize_difficulty_padding_scheme()
 
     def get_sample_from_file(self, piece_idx: int):
         """ファイルからサンプルを取得"""
@@ -267,8 +386,10 @@ class DrumTransformerDataset(Dataset):
 
         piece_bar_pos = self.piece_bar_pos[piece_idx]
 
+        total_bar_count = max(0, len(piece_bar_pos) - 1)
+
         # 小節数に応じてトリミングまたはパディング
-        if len(piece_bar_pos) > self.model_max_bars:
+        if total_bar_count > self.model_max_bars:
             piece_evs = self._slice_piece_evs(
                 piece_evs,
                 piece_bar_pos[picked_st_bar],
@@ -277,14 +398,23 @@ class DrumTransformerDataset(Dataset):
             picked_bar_pos = np.array(
                 piece_bar_pos[picked_st_bar: picked_st_bar + self.model_max_bars]
             ) - piece_bar_pos[picked_st_bar]
-            n_bars = self.model_max_bars
+            n_bars = total_bar_count
             selected_bar_count = self.model_max_bars
         else:
-            picked_bar_pos = np.array(
-                piece_bar_pos + [piece_bar_pos[-1]] * (self.model_max_bars - len(piece_bar_pos))
-            )
-            n_bars = len(piece_bar_pos)
-            selected_bar_count = max(0, len(piece_bar_pos) - 1)
+            picked_bar_pos = list(piece_bar_pos[:-1])
+            pad_bar_count = self.model_max_bars - total_bar_count
+
+            if pad_bar_count > 0:
+                piece_evs = self._append_bar_padding_tokens(piece_evs, pad_bar_count)
+
+                padded_bar_start = piece_bar_pos[-1]
+                for _ in range(pad_bar_count):
+                    picked_bar_pos.append(padded_bar_start)
+                    padded_bar_start += 1
+
+            picked_bar_pos = np.array(picked_bar_pos, dtype=int)
+            n_bars = self.model_max_bars
+            selected_bar_count = self.model_max_bars
             assert len(picked_bar_pos) == self.model_max_bars
 
         # ===== 追加: 難易度クラスの検証・整列 =====
@@ -295,34 +425,14 @@ class DrumTransformerDataset(Dataset):
                 )
 
             difficulty_classes = list(difficulty_classes)
-            if picked_st_bar > 0 or len(piece_bar_pos) > self.model_max_bars:
+            if picked_st_bar > 0 or total_bar_count > self.model_max_bars:
                 difficulty_classes = difficulty_classes[picked_st_bar: picked_st_bar + selected_bar_count]
 
-            if len(difficulty_classes) != selected_bar_count:
-                raise ValueError(
-                    'Difficulty/bar count mismatch: '
-                    f'piece={self.pieces[piece_idx]}, expected_bars={selected_bar_count}, '
-                    f'difficulty_labels={len(difficulty_classes)}'
-                )
-
-            normalized_difficulty = []
-            for bar_idx, diff in enumerate(difficulty_classes):
-                if not isinstance(diff, dict):
-                    raise ValueError(
-                        'Difficulty label format mismatch: '
-                        f'piece={self.pieces[piece_idx]}, bar={bar_idx}, type={type(diff).__name__}'
-                    )
-
-                missing_keys = [k for k in DIFFICULTY_KEYS if k not in diff]
-                if missing_keys:
-                    raise ValueError(
-                        'Difficulty label keys mismatch: '
-                        f'piece={self.pieces[piece_idx]}, bar={bar_idx}, missing={missing_keys}'
-                    )
-
-                normalized_difficulty.append({k: int(diff[k]) for k in DIFFICULTY_KEYS})
-
-            difficulty_classes = normalized_difficulty
+            difficulty_classes = self._normalize_difficulty_labels(
+                difficulty_classes,
+                target_len=selected_bar_count,
+                piece_path=self.pieces[piece_idx],
+            )
         else:
             difficulty_classes = None
         # ==========================================
@@ -706,11 +816,11 @@ class DrumTransformerDataset(Dataset):
             s_move_cls = np.array([d['s_move'] for d in difficulty_classes], dtype=np.int32)
 
             # (seqlen_per_sample,) の形状に拡張
-            s_tech_cls_expanded = np.zeros((self.model_dec_seqlen,), dtype=np.int32)
-            s_indep_cls_expanded = np.zeros((self.model_dec_seqlen,), dtype=np.int32)
-            s_hand_cls_expanded = np.zeros((self.model_dec_seqlen,), dtype=np.int32)
-            s_foot_cls_expanded = np.zeros((self.model_dec_seqlen,), dtype=np.int32)
-            s_move_cls_expanded = np.zeros((self.model_dec_seqlen,), dtype=np.int32)
+            s_tech_cls_expanded = np.full((self.model_dec_seqlen,), self.difficulty_pad_label['s_tech'], dtype=np.int32)
+            s_indep_cls_expanded = np.full((self.model_dec_seqlen,), self.difficulty_pad_label['s_indep'], dtype=np.int32)
+            s_hand_cls_expanded = np.full((self.model_dec_seqlen,), self.difficulty_pad_label['s_hand'], dtype=np.int32)
+            s_foot_cls_expanded = np.full((self.model_dec_seqlen,), self.difficulty_pad_label['s_foot'], dtype=np.int32)
+            s_move_cls_expanded = np.full((self.model_dec_seqlen,), self.difficulty_pad_label['s_move'], dtype=np.int32)
 
             for b, (st, ed) in enumerate(zip(bar_pos[:-1], bar_pos[1:])):
                 if b >= len(difficulty_classes):

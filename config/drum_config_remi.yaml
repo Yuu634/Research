@@ -34,8 +34,25 @@ model:
   # 属性埋め込み（ドラム譜では使用しない）
   d_polyph_emb: 0                         # ポリフォニー埋め込み次元（0=無効）
   d_rfreq_emb: 0                          # リズム頻度埋め込み次元（0=無効）
+  use_attr_cls: true                      # 属性クラス条件付けを使用
+  use_difficulty: true                    # 難易度ラベルを使用するか
+  
+  # 難易度埋め込み設定（use_difficulty=trueの場合に有効）
+  d_s_tech_emb: 32                        # 技術難易度埋め込み次元
+  d_s_indep_emb: 32                       # 独立性難易度埋め込み次元
+  d_s_hand_emb: 32                        # 手指難易度埋め込み次元
+  d_s_foot_emb: 32                        # 足難易度埋め込み次元
+  d_s_move_emb: 32                        # 動き難易度埋め込み次元
+  
+  # 難易度クラス数設定
+  n_s_tech_cls: 8                         # 技術難易度クラス数
+  n_s_indep_cls: 8                        # 独立性難易度クラス数
+  n_s_hand_cls: 8                         # 手指難易度クラス数
+  n_s_foot_cls: 8                         # 足難易度クラス数
+  n_s_move_cls: 8                         # 動き難易度クラス数
+  
   cond_mode: 'in-attn'                    # 条件付けモード（'in-attn' or 'pre-attn'）
-  bar_anchor_mode: 'first_token'          # 小節潜在アンカー（'first_token' or 'bar_token'）
+  bar_anchor_mode: 'bar_token'            # 小節潜在アンカー（'first_token' or 'bar_token'）
 
   # 階層PE（後方互換のため既定は無効）
   use_hierarchical_pe: false
@@ -83,7 +100,7 @@ training:
   free_bit_lambda: 0.0                    # Free bitラムダ値
 
   # チェックポイントとログ
-  ckpt_dir: 'trained_model/checkpoints_drum_remi_with_difficulty'      # チェックポイントディレクトリ
+  ckpt_dir: 'trained_model/checkpoints_drum_remi-new'      # チェックポイントディレクトリ
   ckpt_interval: 5000                     # チェックポイント保存間隔
   log_interval: 100                       # ログ記録間隔
   val_interval: 2000                      # 検証実行間隔
