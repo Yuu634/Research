@@ -7,6 +7,7 @@ import time
 import json
 
 from src.models.musemorphose import MuseMorphose
+from src.models.limb_bias import build_token_to_limb_map
 from src.data.drum_dataloader import DrumTransformerDataset
 from torch.utils.data import DataLoader
 from src.utils.tokenization_mode import (
@@ -1007,6 +1008,20 @@ def main():
               f'hand={resolved_n_s_hand_cls}, foot={resolved_n_s_foot_cls}, '
               f'move={resolved_n_s_move_cls}')
 
+    # limb bias 用の token_to_limb マップを構築
+    use_limb_bias_encoder = bool(mconf.get('use_limb_bias_encoder', False))
+    use_limb_bias_decoder = bool(mconf.get('use_limb_bias_decoder', False))
+    token_to_limb = None
+    if use_limb_bias_encoder or use_limb_bias_decoder:
+        idx2token = getattr(dset, 'idx2token', None)
+        if idx2token is not None:
+            vocab_list = [idx2token.get(i, '') for i in range(dset.vocab_size)]
+            token_to_limb = build_token_to_limb_map(vocab_list)
+        else:
+            print('[warning] idx2token not found in dataset; limb bias disabled.')
+            use_limb_bias_encoder = False
+            use_limb_bias_decoder = False
+
     # まずCPU上でモデルを構築
     model = MuseMorphose(
         mconf['enc_n_layer'],
@@ -1054,6 +1069,9 @@ def main():
         hier_pe_beat_vocab_size=runtime_opts['hier_pe_beat_vocab_size'],
         hier_pe_pos_vocab_size=runtime_opts['hier_pe_pos_vocab_size'],
         hier_pe_use_struct_bias=runtime_opts['hier_pe_use_struct_bias'],
+        use_limb_bias_encoder=use_limb_bias_encoder,
+        use_limb_bias_decoder=use_limb_bias_decoder,
+        token_to_limb=token_to_limb,
     )
 
     # パラメータ数を計算
