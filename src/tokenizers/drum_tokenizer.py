@@ -19,69 +19,55 @@ POSITIONS_PER_BEAT = SHARED_POSITIONS_PER_BEAT  # 1拍を24分割
 
 # ドラム譜用のノートマッピング (カスタムマッピング)
 DRUM_NOTE_MAP = {
-    # Kick
     35: ('KICK', 'HIT'),
     36: ('KICK', 'HIT'),
-
-    # Snare - D2 (MIDI 38)
+    37: ('SNARE_RIM', 'ACCENT'),  # C#2 - Snare accent
     38: ('SNARE', 'HIT'),
+    #39: ('SNARE', 'XSTICK'),  # Side stick
     40: ('SNARE', 'HIT'),
-    37: ('SNARE', 'ACCENT'),  # C#2 - Snare accent
-    39: ('SNARE', 'XSTICK'),  # Side stick
 
-    # Floor tom - F2 (MIDI 41) or G2 (MIDI 43)
     41: ('FLOOR', 'HIT'),  # F2
-    43: ('FLOOR', 'HIT'),  # G2
-
-    # Tom1 - C3 (MIDI 48)
-    48: ('TOM1', 'HIT'),  # C3
-
-    # Tom2 - B2 (MIDI 47)
-    45: ('TOM2', 'HIT'),  # Low tom
-    47: ('TOM2', 'HIT'),  # B2
-    50: ('TOM2', 'HIT'),  # High tom
-
-    # Hi-hat Closed - F#2 (MIDI 42)
     42: ('HH_CLOSED', 'HIT'),  # F#2 - Closed hi-hat
+    43: ('FLOOR', 'HIT'),  # G2
     44: ('HH_PEDAL', 'HIT'),  # G#2 - Pedal hi-hat
-
-    # Hi-hat Open - A#2 (MIDI 46)
+    45: ('TOM_LOW', 'HIT'),  # Low tom
     46: ('HH_OPEN', 'HIT'),  # A#2 - Open hi-hat
-
-    # Ride - D#3 (MIDI 51)
-    51: ('RIDE_BOW', 'HIT'),  # D#3 - Ride cymbal
-    59: ('RIDE_BOW', 'HIT'),  # Ride cymbal 2
-    53: ('RIDE_BELL', 'HIT'),  # Ride bell
-
-    # Crash
+    47: ('TOM_MID', 'HIT'),  # B2
+    48: ('TOM_MID', 'HIT'),  # C3
     49: ('CRASH', 'HIT'),  # Crash cymbal 1
-    57: ('CRASH', 'HIT'),  # Crash cymbal 2
+    50: ('TOM_HIGH', 'HIT'),  # High tom
 
-    # Other cymbals
+    51: ('RIDE_CYMBAL', 'HIT'),  # D#3 - Ride cymbal
     52: ('CHINA', 'HIT'),  # E3 - Chinese cymbal
-    55: ('SPLASH', 'HIT'),  # Splash cymbal
+    53: ('RIDE_BELL', 'HIT'),  # Ride bell
     54: ('TAMBOURINE', 'HIT'),  # F#3 - Tambourine
+    55: ('SPLASH', 'HIT'),  # Splash cymbal
     56: ('COWBELL', 'HIT'),  # G#3 - Cowbell
+    57: ('CRASH', 'HIT'),  # Crash cymbal 2
+    #58: ('VIBRASLAP', 'HIT'),   # Vibraslap
+    59: ('RIDE_CYMBAL', 'HIT'),  # Ride cymbal 2    
 }
 
 # 各楽器の標準ピッチマッピング：複数のピッチをまとめる
 # これにより、往復変換でピッチが保持される
 STANDARD_PITCH_MAP = {
-    'KICK': 36,        # 35 と 36 を 36 に統一
-    'SNARE': 38,       # 38 と 40 を 38 に統一
-    'FLOOR': 43,       # 41 と 43 を 43 に統一
-    'TOM1': 48,        # 標準ピッチ
-    'TOM2': 47,        # 45, 47, 50 を 47 に統一
-    'HH_CLOSED': 42,   # 標準ピッチ
-    'HH_PEDAL': 44,    # 標準ピッチ
-    'HH_OPEN': 46,     # 標準ピッチ
-    'RIDE_BOW': 51,    # 51, 59 を 51 に統一
-    'RIDE_BELL': 53,   # 標準ピッチ
-    'CRASH': 49,       # 49, 57 を 49 に統一
-    'CHINA': 52,       # 標準ピッチ
-    'SPLASH': 55,      # 標準ピッチ
-    'TAMBOURINE': 54,  # 標準ピッチ
-    'COWBELL': 56,     # 標準ピッチ
+    'KICK': 36,          # 35 と 36 を 36 に統一
+    'SNARE_RIM': 37,     # 標準ピッチ
+    'SNARE': 38,         # 38 と 40 を 38 に統一
+    'FLOOR': 43,         # 41 と 43 を 43 に統一
+    'TOM_LOW': 45,       # 標準ピッチ
+    'TOM_MID': 48,       # 47 と 48 を 48 に統一
+    'TOM_HIGH': 50,      # 標準ピッチ
+    'HH_CLOSED': 42,     # 標準ピッチ
+    'HH_PEDAL': 44,      # 標準ピッチ
+    'HH_OPEN': 46,       # 標準ピッチ
+    'RIDE_CYMBAL': 51,   # 51 と 59 を 51 に統一
+    'RIDE_BELL': 53,     # 標準ピッチ
+    'CRASH': 49,         # 49 と 57 を 49 に統一
+    'CHINA': 52,         # 標準ピッチ
+    'SPLASH': 55,        # 標準ピッチ
+    'TAMBOURINE': 54,    # 標準ピッチ
+    'COWBELL': 56,       # 標準ピッチ
 }
 
 
@@ -111,7 +97,7 @@ class DrumTokenizer:
         # 位置トークン (1拍を24分割)
         vocab.extend([f'<POS_{i}>' for i in range(24)])
 
-        # スネアドラム
+        # スネアドラム (SNARE: pitch 38, 40)
         for vel in ['Ghost', 'Normal', 'Accent']:
             vocab.append(f'SNARE_HIT_{vel}')
         for vel in ['Normal', 'Accent']:
@@ -123,19 +109,23 @@ class DrumTokenizer:
             ])
         vocab.append('SNARE_ROLL')
 
-        # キック
+        # スネアリム (SNARE_RIM: pitch 37)
+        for vel in ['Normal', 'Accent']:
+            vocab.append(f'SNARE_RIM_ACCENT_{vel}')
+
+        # キック (KICK: pitch 35, 36)
         for vel in ['Normal', 'Accent']:
             vocab.append(f'KICK_HIT_{vel}')
 
-        # タム類
-        for drum in ['TOM1', 'TOM2', 'FLOOR']:
+        # タム類 (TOM_LOW: pitch 45 / TOM_MID: pitch 47,48 / TOM_HIGH: pitch 50 / FLOOR: pitch 41,43)
+        for drum in ['TOM_LOW', 'TOM_MID', 'TOM_HIGH', 'FLOOR']:
             for vel in ['Normal', 'Accent']:
                 vocab.extend([
                     f'{drum}_HIT_{vel}',
                     f'{drum}_FLAM_{vel}'
                 ])
 
-        # ハイハット
+        # ハイハット (HH_CLOSED: pitch 42 / HH_OPEN: pitch 46 / HH_PEDAL: pitch 44)
         for vel in ['Ghost', 'Normal', 'Accent']:
             vocab.append(f'HH_CLOSED_HIT_{vel}')
         for vel in ['Normal', 'Accent']:
@@ -145,9 +135,9 @@ class DrumTokenizer:
                 f'HH_PEDAL_HIT_{vel}'
             ])
 
-        # ライドシンバル
+        # ライドシンバル (RIDE_CYMBAL: pitch 51, 59 / RIDE_BELL: pitch 53)
         for vel in ['Ghost', 'Normal', 'Accent']:
-            vocab.append(f'RIDE_BOW_HIT_{vel}')
+            vocab.append(f'RIDE_CYMBAL_HIT_{vel}')
         for vel in ['Normal', 'Accent']:
             vocab.append(f'RIDE_BELL_HIT_{vel}')
 

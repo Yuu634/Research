@@ -131,7 +131,7 @@ def remi_indices_to_difficulty_tokens(bar_indices, idx2token):
             pos_idx = (current_step % 4) * 6
             out.append(f'<BEAT_{beat_idx}>')
             out.append(f'<POS_{pos_idx}>')
-            out.append(f'{drum_info[0]}_HIT_{velocity_level}')
+            out.append(f'{drum_info[0]}_{drum_info[1]}_{velocity_level}')
 
         i += 1
 

@@ -20,13 +20,37 @@ from collections import defaultdict
 # 定数定義
 # ============================================================================
 
-# 手の楽器
+# DRUM_NOTE_MAP で定義された2語drum_typeのプレフィックス集合
+# トークン形式: {drum_type}_{technique}_{velocity}
+# 例: SNARE_RIM_ACCENT_Normal → drum_type='SNARE_RIM'（2語）
+_TWO_WORD_DRUM_PREFIXES = {
+    'SNARE_RIM',
+    'HH_CLOSED', 'HH_PEDAL', 'HH_OPEN', 'HH_HALFOPEN',
+    'TOM_LOW', 'TOM_MID', 'TOM_HIGH',
+    'RIDE_CYMBAL', 'RIDE_BELL',
+}
+
+
+def _extract_instrument(token: str) -> str:
+    """トークン文字列から drum_type（楽器名）を小文字で抽出する。
+
+    2語からなる drum_type（例: TOM_LOW, HH_CLOSED）は parts[:2] を結合して返す。
+    1語の drum_type（例: SNARE, KICK）は parts[0] を返す。
+    """
+    parts = token.split('_')
+    if len(parts) >= 2 and f'{parts[0]}_{parts[1]}' in _TWO_WORD_DRUM_PREFIXES:
+        return f'{parts[0]}_{parts[1]}'.lower()
+    return parts[0].lower()
+
+
+# 手の楽器（_extract_instrument が返す小文字 drum_type 名）
 HAND_INSTRUMENTS = {
-    'snare', 'high_tom', 'mid_tom', 'floor_tom', 'floor',
-    'hihat', 'hh_closed', 'hh_halfopen', 'hh_open',
-    'crash_cymbal', 'crash', 'ride_cymbal', 'ride_bow', 'ride_bell',
-    'splash_cymbal', 'splash', 'tambourine', 'china', 'cowbell',
-    'tom1', 'tom2'
+    'snare', 'snare_rim',
+    'floor',
+    'tom_low', 'tom_mid', 'tom_high',
+    'hh_closed', 'hh_halfopen', 'hh_open',
+    'crash', 'ride_cymbal', 'ride_bell',
+    'splash', 'tambourine', 'china', 'cowbell',
 }
 
 # 足の楽器
@@ -36,54 +60,60 @@ FOOT_INSTRUMENTS = {'kick', 'hh_pedal'}
 SPECIAL_TECHNIQUE_KEYWORDS = ['ghost', 'rimshot', 'choke', 'flam', 'roll', 'accent', 'xstick']
 
 # 物理距離行列（正規化済み、最大距離=1.0）
+# キー配置: high_tom → mid_tom → low_tom → floor_tom（左→右）
 DISTANCE_MATRIX = {
-    'snare': {'snare': 0.00, 'hihat': 0.32, 'high_tom': 0.45, 'mid_tom': 0.48,
-              'floor_tom': 0.45, 'crash_cymbal': 0.67, 'ride_cymbal': 0.52,
-              'splash_cymbal': 0.40, 'tambourine': 0.35},
-    'hihat': {'snare': 0.32, 'hihat': 0.00, 'high_tom': 0.32, 'mid_tom': 0.52,
-              'floor_tom': 0.75, 'crash_cymbal': 0.44, 'ride_cymbal': 0.71,
-              'splash_cymbal': 0.35, 'tambourine': 0.10},
-    'high_tom': {'snare': 0.45, 'hihat': 0.32, 'high_tom': 0.00, 'mid_tom': 0.27,
-                 'floor_tom': 0.75, 'crash_cymbal': 0.25, 'ride_cymbal': 0.56,
-                 'splash_cymbal': 0.15, 'tambourine': 0.30},
-    'mid_tom': {'snare': 0.48, 'hihat': 0.52, 'high_tom': 0.27, 'mid_tom': 0.00,
-                'floor_tom': 0.59, 'crash_cymbal': 0.48, 'ride_cymbal': 0.32,
-                'splash_cymbal': 0.20, 'tambourine': 0.50},
-    'floor_tom': {'snare': 0.45, 'hihat': 0.75, 'high_tom': 0.75, 'mid_tom': 0.59,
-                  'floor_tom': 0.00, 'crash_cymbal': 1.00, 'ride_cymbal': 0.35,
-                  'splash_cymbal': 0.65, 'tambourine': 0.75},
-    'crash_cymbal': {'snare': 0.67, 'hihat': 0.44, 'high_tom': 0.25, 'mid_tom': 0.48,
-                     'floor_tom': 1.00, 'crash_cymbal': 0.00, 'ride_cymbal': 0.79,
-                     'splash_cymbal': 0.30, 'tambourine': 0.40},
+    'snare':       {'snare': 0.00, 'hihat': 0.32, 'high_tom': 0.45, 'mid_tom': 0.48,
+                    'low_tom': 0.52, 'floor_tom': 0.45, 'crash_cymbal': 0.67,
+                    'ride_cymbal': 0.52, 'splash_cymbal': 0.40, 'tambourine': 0.35},
+    'hihat':       {'snare': 0.32, 'hihat': 0.00, 'high_tom': 0.32, 'mid_tom': 0.52,
+                    'low_tom': 0.63, 'floor_tom': 0.75, 'crash_cymbal': 0.44,
+                    'ride_cymbal': 0.71, 'splash_cymbal': 0.35, 'tambourine': 0.10},
+    'high_tom':    {'snare': 0.45, 'hihat': 0.32, 'high_tom': 0.00, 'mid_tom': 0.27,
+                    'low_tom': 0.45, 'floor_tom': 0.75, 'crash_cymbal': 0.25,
+                    'ride_cymbal': 0.56, 'splash_cymbal': 0.15, 'tambourine': 0.30},
+    'mid_tom':     {'snare': 0.48, 'hihat': 0.52, 'high_tom': 0.27, 'mid_tom': 0.00,
+                    'low_tom': 0.28, 'floor_tom': 0.59, 'crash_cymbal': 0.48,
+                    'ride_cymbal': 0.32, 'splash_cymbal': 0.20, 'tambourine': 0.50},
+    'low_tom':     {'snare': 0.52, 'hihat': 0.63, 'high_tom': 0.45, 'mid_tom': 0.28,
+                    'low_tom': 0.00, 'floor_tom': 0.30, 'crash_cymbal': 0.70,
+                    'ride_cymbal': 0.30, 'splash_cymbal': 0.30, 'tambourine': 0.60},
+    'floor_tom':   {'snare': 0.45, 'hihat': 0.75, 'high_tom': 0.75, 'mid_tom': 0.59,
+                    'low_tom': 0.30, 'floor_tom': 0.00, 'crash_cymbal': 1.00,
+                    'ride_cymbal': 0.35, 'splash_cymbal': 0.65, 'tambourine': 0.75},
+    'crash_cymbal':{'snare': 0.67, 'hihat': 0.44, 'high_tom': 0.25, 'mid_tom': 0.48,
+                    'low_tom': 0.70, 'floor_tom': 1.00, 'crash_cymbal': 0.00,
+                    'ride_cymbal': 0.79, 'splash_cymbal': 0.30, 'tambourine': 0.40},
     'ride_cymbal': {'snare': 0.52, 'hihat': 0.71, 'high_tom': 0.56, 'mid_tom': 0.32,
-                    'floor_tom': 0.35, 'crash_cymbal': 0.79, 'ride_cymbal': 0.00,
-                    'splash_cymbal': 0.50, 'tambourine': 0.70},
-    'splash_cymbal': {'snare': 0.40, 'hihat': 0.35, 'high_tom': 0.15, 'mid_tom': 0.20,
-                      'floor_tom': 0.65, 'crash_cymbal': 0.30, 'ride_cymbal': 0.50,
-                      'splash_cymbal': 0.00, 'tambourine': 0.35},
-    'tambourine': {'snare': 0.35, 'hihat': 0.10, 'high_tom': 0.30, 'mid_tom': 0.50,
-                   'floor_tom': 0.75, 'crash_cymbal': 0.40, 'ride_cymbal': 0.70,
-                   'splash_cymbal': 0.35, 'tambourine': 0.00}
+                    'low_tom': 0.30, 'floor_tom': 0.35, 'crash_cymbal': 0.79,
+                    'ride_cymbal': 0.00, 'splash_cymbal': 0.50, 'tambourine': 0.70},
+    'splash_cymbal':{'snare': 0.40, 'hihat': 0.35, 'high_tom': 0.15, 'mid_tom': 0.20,
+                    'low_tom': 0.30, 'floor_tom': 0.65, 'crash_cymbal': 0.30,
+                    'ride_cymbal': 0.50, 'splash_cymbal': 0.00, 'tambourine': 0.35},
+    'tambourine':  {'snare': 0.35, 'hihat': 0.10, 'high_tom': 0.30, 'mid_tom': 0.50,
+                    'low_tom': 0.60, 'floor_tom': 0.75, 'crash_cymbal': 0.40,
+                    'ride_cymbal': 0.70, 'splash_cymbal': 0.35, 'tambourine': 0.00},
 }
 
-# トークン名 → 距離行列のキー名へのマッピング
+# _extract_instrument が返す drum_type 名 → DISTANCE_MATRIX キー名
 TOKEN_TO_DISTANCE_KEY = {
-    'snare': 'snare',
-    'kick': None,  # 足なのでNone
-    'floor': 'floor_tom',
-    'tom1': 'high_tom',
-    'tom2': 'mid_tom',
-    'hh_closed': 'hihat',
+    'snare':       'snare',
+    'snare_rim':   'snare',        # スネアと同位置
+    'kick':        None,           # 足なのでNone
+    'floor':       'floor_tom',
+    'tom_low':     'low_tom',
+    'tom_mid':     'mid_tom',
+    'tom_high':    'high_tom',
+    'hh_closed':   'hihat',
     'hh_halfopen': 'hihat',
-    'hh_open': 'hihat',
-    'hh_pedal': None,  # 足なのでNone
-    'ride_bow': 'ride_cymbal',
-    'ride_bell': 'ride_cymbal',
-    'crash': 'crash_cymbal',
-    'china': 'crash_cymbal',  # 近似
-    'splash': 'splash_cymbal',
-    'tambourine': 'tambourine',
-    'cowbell': 'crash_cymbal'  # 近似
+    'hh_open':     'hihat',
+    'hh_pedal':    None,           # 足なのでNone
+    'ride_cymbal': 'ride_cymbal',
+    'ride_bell':   'ride_cymbal',
+    'crash':       'crash_cymbal',
+    'china':       'crash_cymbal', # 近似
+    'splash':      'splash_cymbal',
+    'tambourine':  'tambourine',
+    'cowbell':     'crash_cymbal', # 近似
 }
 
 
@@ -150,12 +180,7 @@ def compute_s_indep(bar_tokens: List[str]) -> float:
             # 演奏トークン
             time_pos = current_beat * 24 + current_pos
 
-            # 楽器名を抽出 (トークン形式: "INSTRUMENT_TECHNIQUE_VELOCITY")
-            parts = token.split('_')
-            if len(parts) == 0:
-                continue
-
-            instrument = parts[0].lower()
+            instrument = _extract_instrument(token)
 
             # 手か足かを判定
             if instrument in HAND_INSTRUMENTS:
@@ -216,12 +241,7 @@ def compute_s_hand(bar_tokens: List[str], bpm: float = 120.0) -> float:
             except ValueError:
                 continue
         elif not (token.startswith('<') and token.endswith('>')):
-            # 演奏トークン
-            parts = token.split('_')
-            if len(parts) == 0:
-                continue
-
-            instrument = parts[0].lower()
+            instrument = _extract_instrument(token)
 
             if instrument in HAND_INSTRUMENTS:
                 time_pos = current_beat * 24 + current_pos
@@ -274,11 +294,7 @@ def compute_s_foot(bar_tokens: List[str], bpm: float = 120.0) -> float:
             except ValueError:
                 continue
         elif not (token.startswith('<') and token.endswith('>')):
-            parts = token.split('_')
-            if len(parts) == 0:
-                continue
-
-            instrument = parts[0].lower()
+            instrument = _extract_instrument(token)
 
             if instrument in FOOT_INSTRUMENTS:
                 time_pos = current_beat * 24 + current_pos
@@ -325,11 +341,7 @@ def compute_s_move(bar_tokens: List[str]) -> float:
             except ValueError:
                 continue
         elif not (token.startswith('<') and token.endswith('>')):
-            parts = token.split('_')
-            if len(parts) == 0:
-                continue
-
-            instrument = parts[0].lower()
+            instrument = _extract_instrument(token)
 
             if instrument in HAND_INSTRUMENTS:
                 time_pos = current_beat * 24 + current_pos

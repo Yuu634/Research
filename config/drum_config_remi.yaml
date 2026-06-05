@@ -2,11 +2,11 @@
 
 # データ設定
 data:
-  data_dir: 'data/processed/drum_dataset_remi_with_difficulty'              # トークン化されたドラムデータのディレクトリ
-  vocab_path: 'data/metadata/drum_vocab_remi.pkl'          # 語彙ファイルのパス
+  data_dir: 'data/processed_old/drum_dataset_remi_with_difficulty'              # トークン化されたドラムデータのディレクトリ
+  vocab_path: 'data/metadata_old/drum_vocab_remi.pkl'          # 語彙ファイルのパス
   tokenization_method: 'remi'         # 'remi' or 'standard' or 'cp_limb_v1'
-  train_split: 'data/processed/drum_dataset_remi_with_difficulty/train_split.pkl'  # 訓練データ分割
-  val_split: 'data/processed/drum_dataset_remi_with_difficulty/val_split.pkl'      # 検証データ分割
+  train_split: 'data/processed_old/drum_dataset_remi_with_difficulty/train_split.pkl'  # 訓練データ分割
+  val_split: 'data/processed_old/drum_dataset_remi_with_difficulty/val_split.pkl'      # 検証データ分割
   enc_seqlen: 128                         # エンコーダー最大系列長
   dec_seqlen: 1280                        # デコーダー最大系列長
   max_bars: 16                            # 最大小節数
@@ -100,7 +100,7 @@ training:
   free_bit_lambda: 0.0                    # Free bitラムダ値
 
   # チェックポイントとログ
-  ckpt_dir: 'trained_model/checkpoints_drum_remi-new'      # チェックポイントディレクトリ
+  ckpt_dir: 'trained_model/checkpoints_drum_remi-new2'      # チェックポイントディレクトリ
   ckpt_interval: 5000                     # チェックポイント保存間隔
   log_interval: 100                       # ログ記録間隔
   val_interval: 2000                      # 検証実行間隔
