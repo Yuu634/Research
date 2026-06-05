@@ -207,6 +207,7 @@ def prepare_drum_dataset(
         )
 
     # 語彙を保存
+    os.makedirs(os.path.dirname(vocab_path), exist_ok=True)
     tokenizer.save_vocab(vocab_path)
     print(f"Vocabulary saved to: {vocab_path}")
     print(f"Vocabulary size: {tokenizer.vocab_size}")

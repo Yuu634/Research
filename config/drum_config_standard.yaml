@@ -100,7 +100,7 @@ training:
   free_bit_lambda: 0.0                    # Free bitラムダ値
 
   # チェックポイントとログ
-  ckpt_dir: 'trained_model/checkpoints_drum_standard-new'      # チェックポイントディレクトリ
+  ckpt_dir: 'trained_model/checkpoints_drum_standard-model1'      # チェックポイントディレクトリ
   ckpt_interval: 5000                     # チェックポイント保存間隔
   log_interval: 100                       # ログ記録間隔
   val_interval: 2000                      # 検証実行間隔

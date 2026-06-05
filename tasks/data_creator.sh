@@ -1,12 +1,12 @@
-for TOKENIZATION_METHOD in "remi" "cp_limb_v1"; do
+for TOKENIZATION_METHOD in "remi" "standard"; do
     echo "=== トークン化手法: ${TOKENIZATION_METHOD} ==="
     
     echo "=== 変数設定 ==="
-    OPEN_DATASET_DIR="dataset" # ドラム譜面の公開データセットディレクトリ
-    DRUM_DATASET_DIR="data/processed/drum_dataset_${TOKENIZATION_METHOD}" # 難易度ラベル付与前データセットパス
-    DRUM_VOCAB_PATH="data/metadata/drum_vocab_${TOKENIZATION_METHOD}.pkl" # ドラム譜面の語彙ファイルパス
-    DIFFICULTY_BOUNDS_PATH="data/metadata/difficulty_bounds_${TOKENIZATION_METHOD}.pkl" # 難易度の境界値を保存するファイルパス
-    DIFFICULTY_DATASET_DIR="data/processed/drum_dataset_${TOKENIZATION_METHOD}_with_difficulty" # 難易度ラベル付与後データセットパス
+    OPEN_DATASET_DIR="data/raw/e-gmd" # ドラム譜面の公開データセットディレクトリ
+    DRUM_DATASET_DIR="data/processed_new/drum_dataset_${TOKENIZATION_METHOD}" # 難易度ラベル付与前データセットパス
+    DRUM_VOCAB_PATH="data/metadata_new/drum_vocab_${TOKENIZATION_METHOD}.pkl" # ドラム譜面の語彙ファイルパス
+    DIFFICULTY_BOUNDS_PATH="data/metadata_new/difficulty_bounds_${TOKENIZATION_METHOD}.pkl" # 難易度の境界値を保存するファイルパス
+    DIFFICULTY_DATASET_DIR="data/processed_new/drum_dataset_${TOKENIZATION_METHOD}_with_difficulty" # 難易度ラベル付与後データセットパス
     DEFAULT_BPM=120 # BPMのデフォルト値
 
     echo "=== MIDIデータセットからpklデータセットを作成 ==="
