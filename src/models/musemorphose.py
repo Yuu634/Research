@@ -6,9 +6,13 @@ from src.models.transformer_helpers import (
   weights_init, PositionalEncoding, HierarchicalDrumPositionalEncoding,
   TokenEmbedding, CpCompositeEmbedding, generate_causal_mask
 )
+from src.models.limb_bias import (
+  build_limb_ids, build_limb_bias_mask, expand_for_mha, make_limb_lookup_table
+)
 
 class VAETransformerDecoder(nn.Module):
-  def __init__(self, n_layer, n_head, d_model, d_ff, d_seg_emb, dropout=0.1, activation='relu', cond_mode='in-attn'):
+  def __init__(self, n_layer, n_head, d_model, d_ff, d_seg_emb, dropout=0.1, activation='relu',
+               cond_mode='in-attn', use_limb_bias: bool = False, alpha_limb_fixed=None):
     super(VAETransformerDecoder, self).__init__()
     self.n_layer = n_layer
     self.n_head = n_head
@@ -18,6 +22,7 @@ class VAETransformerDecoder(nn.Module):
     self.dropout = dropout
     self.activation = activation
     self.cond_mode = cond_mode
+    self.use_limb_bias = use_limb_bias
 
     if cond_mode == 'in-attn':
       self.seg_emb_proj = nn.Linear(d_seg_emb, d_model, bias=False)
@@ -30,11 +35,22 @@ class VAETransformerDecoder(nn.Module):
         nn.TransformerEncoderLayer(d_model, n_head, d_ff, dropout, activation)
       )
 
-  def forward(self, x, seg_emb):
+    if use_limb_bias:
+      if alpha_limb_fixed is None:
+        # 可学習スカラー α（初期値 0.0: 学習開始時はバイアス無効）
+        self.alpha_limb = nn.ParameterList([
+          nn.Parameter(torch.zeros(1)) for _ in range(n_layer)
+        ])
+        self.register_buffer('alpha_limb_fixed', None)
+      else:
+        # 固定スカラー α（勾配なし、全レイヤー共通）
+        self.alpha_limb = None
+        self.register_buffer('alpha_limb_fixed', torch.tensor(float(alpha_limb_fixed)))
+
+  def forward(self, x, seg_emb, limb_bias=None):
     if not hasattr(self, 'cond_mode'):
       self.cond_mode = 'in-attn'
-    attn_mask = generate_causal_mask(x.size(0)).to(x.device)
-    # print (attn_mask.size())
+    attn_mask = generate_causal_mask(x.size(0)).to(x.device)   # [N, N]
 
     if self.cond_mode == 'in-attn':
       seg_emb = self.seg_emb_proj(seg_emb)
@@ -46,7 +62,15 @@ class VAETransformerDecoder(nn.Module):
     for i in range(self.n_layer):
       if self.cond_mode == 'in-attn':
         out += seg_emb
-      out = self.decoder_layers[i](out, src_mask=attn_mask)
+
+      if self.use_limb_bias and limb_bias is not None:
+        alpha = self.alpha_limb_fixed if self.alpha_limb_fixed is not None else self.alpha_limb[i]
+        # causal_mask [N,N] + α * M_limb [B*n_heads, N, N] → [B*n_heads, N, N]
+        effective_mask = attn_mask.unsqueeze(0) + alpha * limb_bias
+      else:
+        effective_mask = attn_mask
+
+      out = self.decoder_layers[i](out, src_mask=effective_mask)
 
     return out
 
@@ -85,6 +109,11 @@ class MuseMorphose(nn.Module):
     hier_pe_beat_vocab_size=8,
     hier_pe_pos_vocab_size=32,
     hier_pe_use_struct_bias=True,
+    # ===== Limb-Relation Bias =====
+    use_limb_bias_encoder: bool = False,
+    use_limb_bias_decoder: bool = False,
+    token_to_limb=None,
+    alpha_limb_fixed=None,
   ):
     super(MuseMorphose, self).__init__()
     self.enc_n_layer = enc_n_layer
@@ -123,8 +152,18 @@ class MuseMorphose(nn.Module):
     else:
       self.hier_pe = None
     self.dec_out_proj = nn.Linear(dec_d_model, n_token)
+
+    # ===== Limb-Relation Bias セットアップ =====
+    self.use_limb_bias_encoder = use_limb_bias_encoder
+    self.use_limb_bias_decoder = use_limb_bias_decoder
+    if (use_limb_bias_encoder or use_limb_bias_decoder) and token_to_limb is not None:
+      table = make_limb_lookup_table(token_to_limb, n_token)
+      self.register_buffer('token_to_limb_table', table)  # [vocab_size], long
+
     self.encoder = VAETransformerEncoder(
-      enc_n_layer, enc_n_head, enc_d_model, enc_d_ff, d_vae_latent, enc_dropout, enc_activation
+      enc_n_layer, enc_n_head, enc_d_model, enc_d_ff, d_vae_latent, enc_dropout, enc_activation,
+      use_limb_bias=use_limb_bias_encoder,
+      alpha_limb_fixed=alpha_limb_fixed,
     )
 
     self.use_attr_cls = use_attr_cls
@@ -156,7 +195,8 @@ class MuseMorphose(nn.Module):
       self.decoder = VAETransformerDecoder(
         dec_n_layer, dec_n_head, dec_d_model, dec_d_ff, d_vae_latent + total_attr_emb_size,
         dropout=dec_dropout, activation=dec_activation,
-        cond_mode=cond_mode
+        cond_mode=cond_mode, use_limb_bias=use_limb_bias_decoder,
+        alpha_limb_fixed=alpha_limb_fixed,
       )
 
       # 5つの属性埋め込み層
@@ -181,7 +221,8 @@ class MuseMorphose(nn.Module):
       self.decoder = VAETransformerDecoder(
         dec_n_layer, dec_n_head, dec_d_model, dec_d_ff, d_vae_latent + d_polyph_emb + d_rfreq_emb,
         dropout=dec_dropout, activation=dec_activation,
-        cond_mode=cond_mode
+        cond_mode=cond_mode, use_limb_bias=use_limb_bias_decoder,
+        alpha_limb_fixed=alpha_limb_fixed,
       )
 
       self.d_rfreq_emb = d_rfreq_emb
@@ -201,7 +242,8 @@ class MuseMorphose(nn.Module):
       self.decoder = VAETransformerDecoder(
         dec_n_layer, dec_n_head, dec_d_model, dec_d_ff, d_vae_latent,
         dropout=dec_dropout, activation=dec_activation,
-        cond_mode=cond_mode
+        cond_mode=cond_mode, use_limb_bias=use_limb_bias_decoder,
+        alpha_limb_fixed=alpha_limb_fixed,
       )
 
       self.rfreq_attr_emb = None
@@ -553,11 +595,29 @@ class MuseMorphose(nn.Module):
     if padding_mask is not None:
       padding_mask = padding_mask.reshape(-1, padding_mask.size(-1))
 
+    # ─── Limb Bias マスクの1回生成（各ループ前にキャッシュ）─────────────────
+    enc_limb_bias_mha = None
+    dec_limb_bias_mha = None
+    if self.use_limb_bias_encoder and hasattr(self, 'token_to_limb_table'):
+      # enc_tokens_flat: [enc_seqlen, B*n_bars]
+      enc_limb_ids = build_limb_ids(enc_tokens_flat, self.token_to_limb_table)
+      enc_limb_bias = build_limb_bias_mask(enc_limb_ids)
+      enc_limb_bias_mha = expand_for_mha(enc_limb_bias, self.enc_n_head)
+      # shape: [B*n_bars*enc_n_head, enc_seqlen, enc_seqlen]
+    if self.use_limb_bias_decoder and hasattr(self, 'token_to_limb_table'):
+      # dec_inp: [dec_seqlen, B]
+      dec_limb_ids = build_limb_ids(dec_inp, self.token_to_limb_table)
+      dec_limb_bias = build_limb_bias_mask(dec_limb_ids)
+      dec_limb_bias_mha = expand_for_mha(dec_limb_bias, self.dec_n_head)
+      # shape: [B*dec_n_head, dec_seqlen, dec_seqlen]
+    # ─────────────────────────────────────────────────────────────────────────
+
     enc_anchor_positions = self._resolve_encoder_anchor_positions(enc_tokens_flat)
     _, mu, logvar = self.encoder(
       enc_inp,
       padding_mask=padding_mask,
       anchor_positions=enc_anchor_positions,
+      limb_bias=enc_limb_bias_mha,
     )
     vae_latent = self.reparameterize(mu, logvar)
     dec_seg_emb = self._build_dec_seg_emb(dec_inp_emb, dec_inp_bar_pos, vae_latent)
@@ -573,7 +633,7 @@ class MuseMorphose(nn.Module):
     )
 
     if self.tokenization_method == 'cp_limb_v1':
-      dec_out = self.decoder(dec_inp_emb, dec_seg_emb_cat)
+      dec_out = self.decoder(dec_inp_emb, dec_seg_emb_cat, limb_bias=dec_limb_bias_mha)
       cp_logits = {
         'event_type': self.cp_event_type_head(dec_out),
         'structural': self.cp_struct_head(dec_out),
@@ -585,7 +645,7 @@ class MuseMorphose(nn.Module):
       }
       return mu, logvar, cp_logits
 
-    dec_out = self.decoder(dec_inp_emb, dec_seg_emb_cat)
+    dec_out = self.decoder(dec_inp_emb, dec_seg_emb_cat, limb_bias=dec_limb_bias_mha)
     dec_logits = self.dec_out_proj(dec_out)
 
     return mu, logvar, dec_logits
