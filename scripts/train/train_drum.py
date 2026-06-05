@@ -1041,6 +1041,12 @@ def main():
     # limb bias 用の token_to_limb マップを構築
     use_limb_bias_encoder = bool(mconf.get('use_limb_bias_encoder', False))
     use_limb_bias_decoder = bool(mconf.get('use_limb_bias_decoder', False))
+    alpha_limb_fixed = mconf.get('limb_bias_alpha', None)
+    if alpha_limb_fixed is not None:
+        alpha_limb_fixed = float(alpha_limb_fixed)
+        print(f'[info] limb bias alpha: fixed={alpha_limb_fixed}')
+    else:
+        print('[info] limb bias alpha: learnable')
     token_to_limb = None
     if use_limb_bias_encoder or use_limb_bias_decoder:
         idx2token = getattr(dset, 'idx2token', None)
@@ -1102,6 +1108,7 @@ def main():
         use_limb_bias_encoder=use_limb_bias_encoder,
         use_limb_bias_decoder=use_limb_bias_decoder,
         token_to_limb=token_to_limb,
+        alpha_limb_fixed=alpha_limb_fixed,
     )
 
     # パラメータ数を計算
