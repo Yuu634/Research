@@ -21,9 +21,25 @@ from src.utils.utils import pickle_load
 from torch import nn, optim
 import torch
 import numpy as np
+import random
 
 import yaml
 import argparse
+
+
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 def log_epoch(log_file, log_data, is_init=False):
@@ -885,6 +901,12 @@ def main():
     # 設定を読み込み
     config = yaml.load(open(args.config, 'r'), Loader=yaml.FullLoader)
     config = _validate_training_config(config)
+
+    seed = config['training'].get('seed', None)
+    if seed is not None:
+        set_seed(seed)
+        print(f'[info] Random seed fixed to {seed}')
+
     tokenization_method = config['data']['tokenization_method']
     use_difficulty = config['model'].get('use_difficulty', False)
 
@@ -966,17 +988,25 @@ def main():
     print(f'[info] # training samples: {len(dset.pieces)}')
     print(f'[info] # validation samples: {len(dset_val.pieces)}')
 
+    dl_generator = torch.Generator()
+    if seed is not None:
+        dl_generator.manual_seed(seed)
+
     dloader = DataLoader(
         dset,
         batch_size=config['data']['batch_size'],
         shuffle=True,
-        num_workers=config['data'].get('num_workers', 8)
+        num_workers=config['data'].get('num_workers', 8),
+        worker_init_fn=seed_worker if seed is not None else None,
+        generator=dl_generator,
     )
     dloader_val = DataLoader(
         dset_val,
         batch_size=config['data']['batch_size'],
         shuffle=True,
-        num_workers=config['data'].get('num_workers', 8)
+        num_workers=config['data'].get('num_workers', 8),
+        worker_init_fn=seed_worker if seed is not None else None,
+        generator=dl_generator,
     )
 
     # モデルを構築
