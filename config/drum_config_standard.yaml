@@ -2,11 +2,11 @@
 
 # データ設定
 data:
-  data_dir: 'data/processed/drum_dataset_standard_with_difficulty'              # トークン化されたドラムデータのディレクトリ
-  vocab_path: 'data/metadata/drum_vocab_standard.pkl'          # 語彙ファイルのパス
+  data_dir: 'data/processed_new/drum_dataset_standard_with_difficulty'              # トークン化されたドラムデータのディレクトリ
+  vocab_path: 'data/metadata_new/drum_vocab_standard.pkl'          # 語彙ファイルのパス
   tokenization_method: 'standard'         # 'standard' or 'cp_limb_v1'
-  train_split: 'data/processed/drum_dataset_standard_with_difficulty/train_split.pkl'  # 訓練データ分割
-  val_split: 'data/processed/drum_dataset_standard_with_difficulty/val_split.pkl'      # 検証データ分割
+  train_split: 'data/processed_new/drum_dataset_standard_with_difficulty/train_split.pkl'  # 訓練データ分割
+  val_split: 'data/processed_new/drum_dataset_standard_with_difficulty/val_split.pkl'      # 検証データ分割
   enc_seqlen: 128                         # エンコーダー最大系列長
   dec_seqlen: 1280                        # デコーダー最大系列長
   max_bars: 16                            # 最大小節数
@@ -51,8 +51,13 @@ model:
   n_s_foot_cls: 8                         # 足難易度クラス数
   n_s_move_cls: 8                         # 動き難易度クラス数
   
-  cond_mode: 'in-attn'                    # 条件付けモード（'in-attn' or 'pre-attn'）
+  cond_mode: 'pre-attn'                    # 条件付けモード（'in-attn' or 'pre-attn'）
   bar_anchor_mode: 'bar_token'            # 小節潜在アンカー（'first_token' or 'bar_token'）
+
+  # Limb-Relation Bias（四肢相関バイアス）
+  use_limb_bias_encoder: true    # EncoderにLimb-Relation Biasを適用するか
+  use_limb_bias_decoder: true    # DecoderにLimb-Relation Biasを適用するか
+  limb_bias_alpha: null          # Limb-Relation Biasのスケーリング係数（nullの場合は自動計算） 
 
   # 階層PE（後方互換のため既定は無効）
   use_hierarchical_pe: false
@@ -81,6 +86,7 @@ model:
 
 # 学習設定
 training:
+  seed: 42                                # ランダムシード
   device: 'cuda'                          # デバイス ('cuda' or 'cpu')
   use_amp: true                           # Mixed Precision Training（メモリ節約と高速化）
   max_epochs: 100                         # 最大エポック数
@@ -100,7 +106,7 @@ training:
   free_bit_lambda: 0.0                    # Free bitラムダ値
 
   # チェックポイントとログ
-  ckpt_dir: 'trained_model/checkpoints_drum_standard-model1'      # チェックポイントディレクトリ
+  ckpt_dir: 'trained_model/checkpoints_drum_standard-model6'      # チェックポイントディレクトリ
   ckpt_interval: 5000                     # チェックポイント保存間隔
   log_interval: 100                       # ログ記録間隔
   val_interval: 2000                      # 検証実行間隔

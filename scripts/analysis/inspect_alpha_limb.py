@@ -4,7 +4,7 @@ encoder.alpha_limb および decoder.alpha_limb の値を抽出してCSVに保�
 
 使用方法:
   python -m scripts.analysis.inspect_alpha_limb \
-    --model_dir /path/to/run_dir \
+    --model_dir trained_model/checkpoints_drum_standard-model4 \
     --output_dir output/alpha_limb
 """
 
@@ -27,9 +27,16 @@ def _parse_step(filename: str) -> int:
 
 def _extract_alpha(state_dict: dict, prefix: str) -> list[float] | None:
     """
-    state_dict から `{prefix}.alpha_limb.{i}` を全レイヤー分取得して返す。
+    state_dict から alpha_limb の値を取得して返す。
+    可学習の場合は `{prefix}.alpha_limb.{i}`、固定値の場合は `{prefix}.alpha_limb_fixed`。
     1つも見つからなければ None。
     """
+    # 固定値バッファを優先チェック
+    fixed_key = f'{prefix}.alpha_limb_fixed'
+    if fixed_key in state_dict and state_dict[fixed_key] is not None:
+        return [state_dict[fixed_key].item()]
+
+    # 可学習 ParameterList
     values = {}
     for key, tensor in state_dict.items():
         if key.startswith(f'{prefix}.alpha_limb.'):
