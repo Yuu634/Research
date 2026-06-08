@@ -1,11 +1,11 @@
 """
 指定したモデルディレクトリの params/ 以下にある全チェックポイントから
-encoder.alpha_limb および decoder.alpha_limb の値を抽出してCSVに保存する。
+encoder.alpha_limb および decoder.alpha_limb の値を抽出してCSVと折れ線グラフに保存する。
 
 使用方法:
   python -m scripts.analysis.inspect_alpha_limb \
-    --model_dir trained_model/checkpoints_drum_standard-model4 \
-    --output_dir output/alpha_limb
+    --model_dir trained_model/checkpoints_drum_standard-model2 \
+    --output_dir output/alpha_limb/model2
 """
 
 import argparse
@@ -13,6 +13,8 @@ import csv
 import os
 import re
 
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 
 
@@ -52,8 +54,10 @@ def inspect(model_dir: str, output_dir: str) -> None:
     if not os.path.isdir(params_dir):
         raise FileNotFoundError(f'params ディレクトリが見つかりません: {params_dir}')
 
+    _EXCLUDE = {'best_params.pt', 'final_params.pt'}
     ckpt_files = sorted(
-        [f for f in os.listdir(params_dir) if f.endswith('.pt')],
+        [f for f in os.listdir(params_dir)
+         if f.endswith('.pt') and f not in _EXCLUDE],
         key=lambda f: (_parse_step(f), f),
     )
     if not ckpt_files:
@@ -107,6 +111,41 @@ def inspect(model_dir: str, output_dir: str) -> None:
     print(f'\n[info] 結果を保存しました: {csv_path}')
     print(f'[info] チェックポイント数: {len(rows)}'
           f'  enc_layers={enc_n_layers}  dec_layers={dec_n_layers}')
+
+    _plot_alpha(rows, enc_n_layers, dec_n_layers, output_dir)
+
+
+def _plot_alpha(rows: list[dict], enc_n_layers: int, dec_n_layers: int, output_dir: str) -> None:
+    steps = [r['step'] for r in rows]
+    tab10 = plt.cm.tab10.colors
+
+    for prefix, n_layers, marker, title_prefix, fname in [
+        ('enc', enc_n_layers, 'o', 'Encoder', 'alpha_limb_encoder.png'),
+        ('dec', dec_n_layers, 's', 'Decoder', 'alpha_limb_decoder.png'),
+    ]:
+        if n_layers == 0:
+            continue
+
+        fig, ax = plt.subplots(figsize=(11, 5))
+        for i in range(n_layers):
+            key = f'{prefix}_alpha_{i}'
+            values = [r.get(key) for r in rows]
+            if any(v is not None for v in values):
+                ax.plot(steps, values,
+                        color=tab10[i % len(tab10)], linestyle='-', marker=marker,
+                        markersize=4, linewidth=2.0, label=f'Layer {i}')
+
+        ax.set_xlabel('Step', fontsize=12)
+        ax.set_ylabel('alpha_limb', fontsize=12)
+        ax.set_title(f'{title_prefix} alpha_limb per layer over training steps', fontsize=13)
+        ax.legend(loc='best', fontsize=9, ncol=2)
+        ax.grid(True, alpha=0.3)
+
+        fig_path = os.path.join(output_dir, fname)
+        fig.tight_layout()
+        fig.savefig(fig_path, dpi=150)
+        plt.close(fig)
+        print(f'[info] グラフを保存しました: {fig_path}')
 
 
 def main() -> None:

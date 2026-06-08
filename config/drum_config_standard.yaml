@@ -55,8 +55,8 @@ model:
   bar_anchor_mode: 'bar_token'            # 小節潜在アンカー（'first_token' or 'bar_token'）
 
   # Limb-Relation Bias（四肢相関バイアス）
-  use_limb_bias_encoder: true    # EncoderにLimb-Relation Biasを適用するか
-  use_limb_bias_decoder: true    # DecoderにLimb-Relation Biasを適用するか
+  use_limb_bias_encoder: false    # EncoderにLimb-Relation Biasを適用するか
+  use_limb_bias_decoder: false    # DecoderにLimb-Relation Biasを適用するか
   limb_bias_alpha: null          # Limb-Relation Biasのスケーリング係数（nullの場合は自動計算） 
 
   # 階層PE（後方互換のため既定は無効）
@@ -106,7 +106,7 @@ training:
   free_bit_lambda: 0.0                    # Free bitラムダ値
 
   # チェックポイントとログ
-  ckpt_dir: 'trained_model/checkpoints_drum_standard-model6'      # チェックポイントディレクトリ
+  ckpt_dir: 'trained_model/checkpoints_drum_standard-model7'      # チェックポイントディレクトリ
   ckpt_interval: 5000                     # チェックポイント保存間隔
   log_interval: 100                       # ログ記録間隔
   val_interval: 2000                      # 検証実行間隔

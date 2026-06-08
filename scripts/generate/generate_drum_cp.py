@@ -21,10 +21,10 @@ import torch
 import yaml
 from scipy.stats import entropy
 
-from drum_dataloader import DrumTransformerDataset
-from model.musemorphose import MuseMorphose
-from utils import pickle_load, numpy_to_tensor, tensor_to_numpy
-from drum_to_midi import cp_data_to_midi
+from src.data.drum_dataloader import DrumTransformerDataset
+from src.models.musemorphose import MuseMorphose
+from src.utils.utils import pickle_load, numpy_to_tensor, tensor_to_numpy
+from src.utils.drum_to_midi import cp_data_to_midi
 
 try:
     from src.utils.tokenization_mode import (

@@ -425,11 +425,18 @@ def _resolve_runtime_model_options_cp(mconf, tokenizer):
 def resolve_mode_adapter(tokenization_method, vocab_data):
     """tokenization_method に応じて tokenizer adapter を返す。"""
     if tokenization_method == 'standard':
-        if not isinstance(vocab_data, tuple) or len(vocab_data) < 2:
-            raise ValueError('standard mode expects tuple vocab payload (token2idx, idx2token).')
+        if isinstance(vocab_data, dict):
+            token2idx = vocab_data['token2idx']
+            idx2token = vocab_data['idx2token']
+        elif isinstance(vocab_data, tuple) and len(vocab_data) >= 2:
+            token2idx, idx2token = vocab_data[0], vocab_data[1]
+        else:
+            raise ValueError('standard mode expects tuple or dict vocab payload (token2idx, idx2token).')
         tokenizer = DrumTokenizer()
-        tokenizer.token2idx, tokenizer.idx2token = vocab_data
-        tokenizer.vocab_size = len(tokenizer.token2idx)
+        tokenizer.token2idx = token2idx
+        tokenizer.idx2token = idx2token
+        # +1 matches DrumTransformerDataset: pad_token = len(token2idx), vocab_size = pad_token + 1
+        tokenizer.vocab_size = len(tokenizer.token2idx) + 1
         return {
             'mode': 'standard',
             'tokenizer': tokenizer,
@@ -443,7 +450,8 @@ def resolve_mode_adapter(tokenization_method, vocab_data):
         if isinstance(vocab_data, dict):
             tokenizer.token2idx = vocab_data['token2idx']
             tokenizer.idx2token = vocab_data['idx2token']
-            tokenizer.vocab_size = len(tokenizer.token2idx)
+            # +1 matches DrumTransformerDataset: pad_token = len(token2idx), vocab_size = pad_token + 1
+            tokenizer.vocab_size = len(tokenizer.token2idx) + 1
         else:
             raise ValueError('remi mode expects dict vocab payload with token2idx/idx2token.')
         return {
