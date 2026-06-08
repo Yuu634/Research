@@ -1,7 +1,9 @@
 __pycache__/
 
 .claude/worktrees/*
-data/*
-dataset/*
+data/*/
 output/*
 trained_model/*
+
+**/*.tar.gz
+**/*.zip
