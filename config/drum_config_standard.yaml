@@ -51,13 +51,25 @@ model:
   n_s_foot_cls: 8                         # 足難易度クラス数
   n_s_move_cls: 8                         # 動き難易度クラス数
   
-  cond_mode: 'pre-attn'                    # 条件付けモード（'in-attn' or 'pre-attn'）
+  cond_mode: 'in-attn'                    # 条件付けモード（'in-attn' or 'pre-attn'）
   bar_anchor_mode: 'bar_token'            # 小節潜在アンカー（'first_token' or 'bar_token'）
 
   # Limb-Relation Bias（四肢相関バイアス）
   use_limb_bias_encoder: false    # EncoderにLimb-Relation Biasを適用するか
   use_limb_bias_decoder: false    # DecoderにLimb-Relation Biasを適用するか
-  limb_bias_alpha: null          # Limb-Relation Biasのスケーリング係数（nullの場合は自動計算） 
+  limb_bias_alpha: null          # Limb-Relation Biasのスケーリング係数（nullの場合は自動計算）
+
+  # Position-Same-Time Bias（同一演奏位置バイアス）
+  # 同じ Bar+Beat+Pos にあるノートトークン同士の Attention にバイアスを加算する
+  use_position_bias_encoder: true   # Encoder に適用するか
+  use_position_bias_decoder: true   # Decoder に適用するか
+  # position_bias_mode:
+  #   'uniform'    - 全ペアに同一スカラー α
+  #   'per_limb'   - HAND/RFOOT/LFOOT の 3×3 対称行列（αSNARE-KICK == αKICK-SNARE）
+  #   'asymmetric' - HAND/RFOOT/LFOOT の 3×3 非対称行列（αSNARE→KICK ≠ αKICK→SNARE）
+  position_bias_mode: 'uniform'
+  position_bias_alpha: null       # Position-Same-Time Biasのスケーリング係数（nullの場合は自動計算）
+  position_bias_per_layer: true   # 各層ごとに異なるバイアスを学習するか（falseの場合は全層共通）
 
   # 階層PE（後方互換のため既定は無効）
   use_hierarchical_pe: false
@@ -106,7 +118,14 @@ training:
   free_bit_lambda: 0.0                    # Free bitラムダ値
 
   # チェックポイントとログ
-  ckpt_dir: 'trained_model/checkpoints_drum_standard-model7'      # チェックポイントディレクトリ
+  ckpt_dir: 'trained_model/checkpoints_drum_standard-model8'      # チェックポイントディレクトリ
   ckpt_interval: 5000                     # チェックポイント保存間隔
   log_interval: 100                       # ログ記録間隔
   val_interval: 2000                      # 検証実行間隔
+
+  # Early Stopping
+  early_stopping:
+    enabled: true               # true にすると有効化
+    patience: 5                 # 改善なしを何検証回分許容するか（val_interval 回分）
+    min_delta: 0.0001           # 改善とみなす最小変化量（再構成損失）
+    restore_best_weights: true  # 停止時に最良モデルの重みを復元するか

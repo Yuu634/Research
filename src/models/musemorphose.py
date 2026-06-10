@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
+from typing import Optional
 from src.models.transformer_encoder import VAETransformerEncoder
 from src.models.transformer_helpers import (
   weights_init, PositionalEncoding, HierarchicalDrumPositionalEncoding,
@@ -12,7 +13,12 @@ from src.models.limb_bias import (
 
 class VAETransformerDecoder(nn.Module):
   def __init__(self, n_layer, n_head, d_model, d_ff, d_seg_emb, dropout=0.1, activation='relu',
-               cond_mode='in-attn', use_limb_bias: bool = False, alpha_limb_fixed=None):
+               cond_mode='in-attn', use_limb_bias: bool = False, alpha_limb_fixed=None,
+               # ===== Position-Same-Time Bias =====
+               use_position_bias: bool = False,
+               position_bias_mode: str = 'uniform',
+               alpha_pos_fixed: Optional[float] = None,
+               position_bias_per_layer: bool = True):
     super(VAETransformerDecoder, self).__init__()
     self.n_layer = n_layer
     self.n_head = n_head
@@ -23,6 +29,7 @@ class VAETransformerDecoder(nn.Module):
     self.activation = activation
     self.cond_mode = cond_mode
     self.use_limb_bias = use_limb_bias
+    self.use_position_bias = use_position_bias
 
     if cond_mode == 'in-attn':
       self.seg_emb_proj = nn.Linear(d_seg_emb, d_model, bias=False)
@@ -35,19 +42,29 @@ class VAETransformerDecoder(nn.Module):
         nn.TransformerEncoderLayer(d_model, n_head, d_ff, dropout, activation)
       )
 
+    # Limb Bias パラメータ
     if use_limb_bias:
       if alpha_limb_fixed is None:
-        # 可学習スカラー α（初期値 0.0: 学習開始時はバイアス無効）
         self.alpha_limb = nn.ParameterList([
           nn.Parameter(torch.zeros(1)) for _ in range(n_layer)
         ])
         self.register_buffer('alpha_limb_fixed', None)
       else:
-        # 固定スカラー α（勾配なし、全レイヤー共通）
         self.alpha_limb = None
         self.register_buffer('alpha_limb_fixed', torch.tensor(float(alpha_limb_fixed)))
 
-  def forward(self, x, seg_emb, limb_bias=None):
+    # Position Bias パラメータ
+    if use_position_bias:
+      from src.models.position_bias import PositionBiasModule
+      self.position_bias_module = PositionBiasModule(
+        mode=position_bias_mode,
+        n_layers=n_layer,
+        alpha_fixed=alpha_pos_fixed,
+        per_layer=position_bias_per_layer,
+      )
+
+  def forward(self, x, seg_emb, limb_bias=None,
+              position_bias=None, limb_ids_for_pos_bias=None):
     if not hasattr(self, 'cond_mode'):
       self.cond_mode = 'in-attn'
     attn_mask = generate_causal_mask(x.size(0)).to(x.device)   # [N, N]
@@ -63,12 +80,24 @@ class VAETransformerDecoder(nn.Module):
       if self.cond_mode == 'in-attn':
         out += seg_emb
 
+      # causal mask をベースに各バイアスを加算
+      effective_mask = attn_mask  # [N, N]
+
       if self.use_limb_bias and limb_bias is not None:
-        alpha = self.alpha_limb_fixed if self.alpha_limb_fixed is not None else self.alpha_limb[i]
-        # causal_mask [N,N] + α * M_limb [B*n_heads, N, N] → [B*n_heads, N, N]
-        effective_mask = attn_mask.unsqueeze(0) + alpha * limb_bias
-      else:
-        effective_mask = attn_mask
+        alpha = (self.alpha_limb_fixed
+                 if self.alpha_limb_fixed is not None
+                 else self.alpha_limb[i])
+        effective_mask = attn_mask.unsqueeze(0) + alpha * limb_bias  # [B*n_heads, N, N]
+
+      if self.use_position_bias and position_bias is not None:
+        pos_contrib = self.position_bias_module.get_bias_for_layer(
+          i, position_bias, limb_ids_for_pos_bias
+        )                                      # [B, N, N]
+        pos_contrib_mha = expand_for_mha(pos_contrib, self.n_head)  # [B*n_heads, N, N]
+        if effective_mask.dim() == 2:
+          effective_mask = attn_mask.unsqueeze(0) + pos_contrib_mha
+        else:
+          effective_mask = effective_mask + pos_contrib_mha
 
       out = self.decoder_layers[i](out, src_mask=effective_mask)
 
@@ -114,6 +143,13 @@ class MuseMorphose(nn.Module):
     use_limb_bias_decoder: bool = False,
     token_to_limb=None,
     alpha_limb_fixed=None,
+    # ===== Position-Same-Time Bias =====
+    use_position_bias_encoder: bool = False,
+    use_position_bias_decoder: bool = False,
+    position_bias_mode: str = 'uniform',
+    alpha_pos_fixed: Optional[float] = None,
+    position_bias_per_layer: bool = True,
+    pos_token_ids: Optional[dict] = None,
   ):
     super(MuseMorphose, self).__init__()
     self.enc_n_layer = enc_n_layer
@@ -156,14 +192,39 @@ class MuseMorphose(nn.Module):
     # ===== Limb-Relation Bias セットアップ =====
     self.use_limb_bias_encoder = use_limb_bias_encoder
     self.use_limb_bias_decoder = use_limb_bias_decoder
-    if (use_limb_bias_encoder or use_limb_bias_decoder) and token_to_limb is not None:
+    self.use_position_bias_encoder = use_position_bias_encoder
+    self.use_position_bias_decoder = use_position_bias_decoder
+
+    needs_limb_table = (use_limb_bias_encoder or use_limb_bias_decoder
+                        or use_position_bias_encoder or use_position_bias_decoder)
+    if needs_limb_table and token_to_limb is not None:
       table = make_limb_lookup_table(token_to_limb, n_token)
       self.register_buffer('token_to_limb_table', table)  # [vocab_size], long
+
+    # ===== Position-Same-Time Bias: トークンID → 位置変換に必要なインデックス =====
+    if (use_position_bias_encoder or use_position_bias_decoder) and pos_token_ids is not None:
+      self._pos_token_start  = pos_token_ids.get('pos_start')
+      self._pos_token_end    = pos_token_ids.get('pos_end')
+      self._beat_token_start = pos_token_ids.get('beat_start')
+      self._beat_token_end   = pos_token_ids.get('beat_end')
+      self._pad_token_idx    = pos_token_ids.get('pad')
+      self._eos_token_idx    = pos_token_ids.get('eos')
+    else:
+      self._pos_token_start  = None
+      self._pos_token_end    = None
+      self._beat_token_start = None
+      self._beat_token_end   = None
+      self._pad_token_idx    = None
+      self._eos_token_idx    = None
 
     self.encoder = VAETransformerEncoder(
       enc_n_layer, enc_n_head, enc_d_model, enc_d_ff, d_vae_latent, enc_dropout, enc_activation,
       use_limb_bias=use_limb_bias_encoder,
       alpha_limb_fixed=alpha_limb_fixed,
+      use_position_bias=use_position_bias_encoder,
+      position_bias_mode=position_bias_mode,
+      alpha_pos_fixed=alpha_pos_fixed,
+      position_bias_per_layer=position_bias_per_layer,
     )
 
     self.use_attr_cls = use_attr_cls
@@ -197,6 +258,10 @@ class MuseMorphose(nn.Module):
         dropout=dec_dropout, activation=dec_activation,
         cond_mode=cond_mode, use_limb_bias=use_limb_bias_decoder,
         alpha_limb_fixed=alpha_limb_fixed,
+        use_position_bias=use_position_bias_decoder,
+        position_bias_mode=position_bias_mode,
+        alpha_pos_fixed=alpha_pos_fixed,
+        position_bias_per_layer=position_bias_per_layer,
       )
 
       # 5つの属性埋め込み層
@@ -223,6 +288,10 @@ class MuseMorphose(nn.Module):
         dropout=dec_dropout, activation=dec_activation,
         cond_mode=cond_mode, use_limb_bias=use_limb_bias_decoder,
         alpha_limb_fixed=alpha_limb_fixed,
+        use_position_bias=use_position_bias_decoder,
+        position_bias_mode=position_bias_mode,
+        alpha_pos_fixed=alpha_pos_fixed,
+        position_bias_per_layer=position_bias_per_layer,
       )
 
       self.d_rfreq_emb = d_rfreq_emb
@@ -244,6 +313,10 @@ class MuseMorphose(nn.Module):
         dropout=dec_dropout, activation=dec_activation,
         cond_mode=cond_mode, use_limb_bias=use_limb_bias_decoder,
         alpha_limb_fixed=alpha_limb_fixed,
+        use_position_bias=use_position_bias_decoder,
+        position_bias_mode=position_bias_mode,
+        alpha_pos_fixed=alpha_pos_fixed,
+        position_bias_per_layer=position_bias_per_layer,
       )
 
       self.rfreq_attr_emb = None
@@ -598,6 +671,8 @@ class MuseMorphose(nn.Module):
     # ─── Limb Bias マスクの1回生成（各ループ前にキャッシュ）─────────────────
     enc_limb_bias_mha = None
     dec_limb_bias_mha = None
+    enc_limb_ids = None
+    dec_limb_ids = None
     if self.use_limb_bias_encoder and hasattr(self, 'token_to_limb_table'):
       # enc_tokens_flat: [enc_seqlen, B*n_bars]
       enc_limb_ids = build_limb_ids(enc_tokens_flat, self.token_to_limb_table)
@@ -612,12 +687,62 @@ class MuseMorphose(nn.Module):
       # shape: [B*dec_n_head, dec_seqlen, dec_seqlen]
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ─── Position-Same-Time Bias マスクの生成 ────────────────────────────────
+    enc_pos_bias = None
+    dec_pos_bias = None
+    enc_limb_ids_for_pos = None
+    dec_limb_ids_for_pos = None
+    _pos_ready = (self._pos_token_start is not None and hasattr(self, 'token_to_limb_table'))
+    if (self.use_position_bias_encoder or self.use_position_bias_decoder) and _pos_ready:
+      from src.models.position_bias import build_position_ids, build_position_bias_mask
+
+      if self.use_position_bias_encoder:
+        _enc_limb_tbl = self.token_to_limb_table
+        enc_pos_group_ids = build_position_ids(
+          enc_tokens_flat,
+          pos_token_start=self._pos_token_start,
+          pos_token_end=self._pos_token_end,
+          beat_token_start=self._beat_token_start,
+          beat_token_end=self._beat_token_end,
+          bar_token_idx=self.bar_token_idx,
+          pad_token_idx=self._pad_token_idx,
+          limb_lookup_table=_enc_limb_tbl,
+          eos_token_idx=self._eos_token_idx,
+        )  # [B*n_bars, enc_seqlen]
+        enc_pos_bias = build_position_bias_mask(enc_pos_group_ids)  # [B*n_bars, N, N]
+        if self.encoder.position_bias_module.mode in ('per_limb', 'asymmetric'):
+          if enc_limb_ids is None:
+            enc_limb_ids = build_limb_ids(enc_tokens_flat, self.token_to_limb_table)
+          enc_limb_ids_for_pos = enc_limb_ids
+
+      if self.use_position_bias_decoder:
+        _dec_limb_tbl = self.token_to_limb_table
+        dec_pos_group_ids = build_position_ids(
+          dec_inp,
+          pos_token_start=self._pos_token_start,
+          pos_token_end=self._pos_token_end,
+          beat_token_start=self._beat_token_start,
+          beat_token_end=self._beat_token_end,
+          bar_token_idx=self.bar_token_idx,
+          pad_token_idx=self._pad_token_idx,
+          limb_lookup_table=_dec_limb_tbl,
+          eos_token_idx=self._eos_token_idx,
+        )  # [B, dec_seqlen]
+        dec_pos_bias = build_position_bias_mask(dec_pos_group_ids)  # [B, N, N]
+        if self.decoder.position_bias_module.mode in ('per_limb', 'asymmetric'):
+          if dec_limb_ids is None:
+            dec_limb_ids = build_limb_ids(dec_inp, self.token_to_limb_table)
+          dec_limb_ids_for_pos = dec_limb_ids
+    # ─────────────────────────────────────────────────────────────────────────
+
     enc_anchor_positions = self._resolve_encoder_anchor_positions(enc_tokens_flat)
     _, mu, logvar = self.encoder(
       enc_inp,
       padding_mask=padding_mask,
       anchor_positions=enc_anchor_positions,
       limb_bias=enc_limb_bias_mha,
+      position_bias=enc_pos_bias,
+      limb_ids_for_pos_bias=enc_limb_ids_for_pos,
     )
     vae_latent = self.reparameterize(mu, logvar)
     dec_seg_emb = self._build_dec_seg_emb(dec_inp_emb, dec_inp_bar_pos, vae_latent)
@@ -633,7 +758,8 @@ class MuseMorphose(nn.Module):
     )
 
     if self.tokenization_method == 'cp_limb_v1':
-      dec_out = self.decoder(dec_inp_emb, dec_seg_emb_cat, limb_bias=dec_limb_bias_mha)
+      dec_out = self.decoder(dec_inp_emb, dec_seg_emb_cat, limb_bias=dec_limb_bias_mha,
+                             position_bias=dec_pos_bias, limb_ids_for_pos_bias=dec_limb_ids_for_pos)
       cp_logits = {
         'event_type': self.cp_event_type_head(dec_out),
         'structural': self.cp_struct_head(dec_out),
@@ -645,7 +771,8 @@ class MuseMorphose(nn.Module):
       }
       return mu, logvar, cp_logits
 
-    dec_out = self.decoder(dec_inp_emb, dec_seg_emb_cat, limb_bias=dec_limb_bias_mha)
+    dec_out = self.decoder(dec_inp_emb, dec_seg_emb_cat, limb_bias=dec_limb_bias_mha,
+                           position_bias=dec_pos_bias, limb_ids_for_pos_bias=dec_limb_ids_for_pos)
     dec_logits = self.dec_out_proj(dec_out)
 
     return mu, logvar, dec_logits

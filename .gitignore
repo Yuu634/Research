@@ -2,6 +2,7 @@ __pycache__/
 
 .claude/worktrees/*
 data/*/
+logs/*
 output/*
 trained_model/*
 

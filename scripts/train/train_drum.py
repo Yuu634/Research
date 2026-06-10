@@ -26,6 +26,40 @@ import random
 import yaml
 import argparse
 
+class EarlyStopping:
+    """
+    検証損失を監視し、patience 回改善しなければ学習を停止する。
+
+    Args:
+        patience             : 改善なしを何検証回分許容するか
+        min_delta            : 改善とみなす最小変化量（この値以上減少しなければ改善なしとみなす）
+        restore_best_weights : 停止時に最良モデルの重みを復元するか
+    """
+    def __init__(self, patience: int, min_delta: float = 0.0,
+                 restore_best_weights: bool = True):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.restore_best_weights = restore_best_weights
+        self.counter = 0        # 改善なし検証回数
+        self.best_loss = None   # EarlyStopping 用ベスト損失（checkpoint 保存とは独立）
+        self.triggered = False  # 停止フラグ
+
+    def check(self, current_val_loss: float) -> bool:
+        """
+        val_loss を受け取り、停止すべきかどうかを返す。
+        Returns: True = 停止すべき
+        """
+        if self.best_loss is None or current_val_loss < self.best_loss - self.min_delta:
+            self.best_loss = current_val_loss
+            self.counter = 0
+        else:
+            self.counter += 1
+            print(f'[early_stopping] no improvement {self.counter}/{self.patience}')
+            if self.counter >= self.patience:
+                self.triggered = True
+                return True
+        return False
+
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -293,7 +327,7 @@ def _load_state_dict_with_compat(model, state_dict, desc='checkpoint'):
         model.load_state_dict(state_dict, strict=False)
 
 
-def train_model(epoch, model, dloader, dloader_val, optim, sched, config, trained_steps, scaler=None, best_val_loss=float('inf')):
+def train_model(epoch, model, dloader, dloader_val, optim, sched, config, trained_steps, scaler=None, best_val_loss=float('inf'), early_stopper=None):
     """モデルの学習（1エポック）"""
     model.train()
 
@@ -710,7 +744,14 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                     os.path.join(params_dir, 'best_params.pt')
                 )
                 print(f'[info] New best model saved! (val_loss: {best_val_loss:.4f})')
-            
+
+            # Early Stopping チェック
+            if early_stopper is not None:
+                if early_stopper.check(current_val_loss):
+                    print(f'[early_stopping] triggered after {trained_steps} steps '
+                          f'(patience={early_stopper.patience})')
+                    return trained_steps, best_val_loss
+
             model.train()
 
         # チェックポイントの保存
@@ -1174,7 +1215,20 @@ def main():
     # 学習ループ
     print('[info] Starting training...')
     best_val_loss = float('inf')
-    
+
+    # Early Stopping の初期化
+    es_cfg = config['training'].get('early_stopping', {})
+    early_stopper = None
+    if es_cfg.get('enabled', False):
+        early_stopper = EarlyStopping(
+            patience=int(es_cfg['patience']),
+            min_delta=float(es_cfg.get('min_delta', 0.0)),
+            restore_best_weights=bool(es_cfg.get('restore_best_weights', True)),
+        )
+        print(f'[info] EarlyStopping enabled: patience={early_stopper.patience}, '
+              f'min_delta={early_stopper.min_delta}, '
+              f'restore_best_weights={early_stopper.restore_best_weights}')
+
     for ep in range(config['training']['max_epochs']):
         trained_steps, best_val_loss = train_model(
             ep + 1,
@@ -1186,8 +1240,26 @@ def main():
             config,
             trained_steps,
             scaler=scaler,
-            best_val_loss=best_val_loss
+            best_val_loss=best_val_loss,
+            early_stopper=early_stopper,
         )
+        if early_stopper is not None and early_stopper.triggered:
+            break
+
+    # Early Stopping: best weights の復元
+    if early_stopper is not None and early_stopper.triggered:
+        if early_stopper.restore_best_weights:
+            best_params_path_es = os.path.join(params_dir, 'best_params.pt')
+            if os.path.exists(best_params_path_es):
+                _load_state_dict_with_compat(
+                    model,
+                    torch.load(best_params_path_es, map_location=device),
+                    desc='best_params.pt'
+                )
+                print(f'[early_stopping] Restored best weights from {best_params_path_es}')
+            else:
+                print('[early_stopping] Warning: best_params.pt not found, weights not restored')
+        print(f'[early_stopping] Training stopped early at step {trained_steps}')
 
     # 学習終了時に最終モデルを保存
     print('[info] Saving final model...')
