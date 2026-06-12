@@ -36,6 +36,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.models.musemorphose import MuseMorphose
+from src.models.limb_bias import build_token_to_limb_map
 from src.tokenizers.drum_tokenizer import DrumTokenizer
 from src.utils.drum_to_midi import tokens_to_midi, cp_data_to_midi
 from src.utils.tokenization_mode import validate_tokenization_method
@@ -79,22 +80,108 @@ DEFAULT_DIFFICULTY_BOUNDS = 'data/metadata/difficulty_bounds_standard.pkl'
 # 難易度ラベル読み込み
 # ---------------------------------------------------------------------------
 
-def load_difficulty_labels(labels_file: str) -> List[Dict[str, int]]:
+def load_difficulty_labels(labels_file: str) -> List[Dict[str, Any]]:
     with open(labels_file, 'r', encoding='utf-8') as f:
         raw = json.load(f)
 
-    labels: List[Dict[str, int]] = []
+    labels: List[Dict[str, Any]] = []
     for item in raw:
         if isinstance(item, dict):
             for k in DIFFICULTY_KEYS:
                 if k not in item:
                     raise ValueError(f'難易度ラベルにキーが不足しています: {k}')
-            labels.append({k: int(item[k]) for k in DIFFICULTY_KEYS})
+            mode = item.get('difficulty_mode', 'full_assign')
+            labels.append({k: int(item[k]) for k in DIFFICULTY_KEYS} | {'difficulty_mode': mode})
         elif isinstance(item, list) and len(item) == len(DIFFICULTY_KEYS):
-            labels.append({k: int(v) for k, v in zip(DIFFICULTY_KEYS, item)})
+            labels.append({k: int(v) for k, v in zip(DIFFICULTY_KEYS, item)} | {'difficulty_mode': 'full_assign'})
         else:
             raise ValueError(f'不正な難易度ラベル形式: {item}')
     return labels
+
+
+# ---------------------------------------------------------------------------
+# Limb/Position Bias パラメータ解決
+# ---------------------------------------------------------------------------
+
+def _resolve_bias_params(mconf: dict, tokenizer) -> dict:
+    """
+    config と tokenizer から limb/position bias 関連パラメータを解決する。
+    学習スクリプト (train_drum.py) と同一ロジック。
+    """
+    use_limb_bias_encoder = bool(mconf.get('use_limb_bias_encoder', False))
+    use_limb_bias_decoder = bool(mconf.get('use_limb_bias_decoder', False))
+    alpha_limb_fixed = mconf.get('limb_bias_alpha', None)
+    if alpha_limb_fixed is not None:
+        alpha_limb_fixed = float(alpha_limb_fixed)
+
+    token_to_limb = None
+    if use_limb_bias_encoder or use_limb_bias_decoder:
+        idx2token = getattr(tokenizer, 'idx2token', None)
+        if idx2token is not None:
+            vocab_list = [idx2token.get(i, '') for i in range(tokenizer.vocab_size)]
+            token_to_limb = build_token_to_limb_map(vocab_list)
+        else:
+            print('[warning] idx2token not found in tokenizer; limb bias disabled.')
+            use_limb_bias_encoder = False
+            use_limb_bias_decoder = False
+
+    use_position_bias_encoder = bool(mconf.get('use_position_bias_encoder', False))
+    use_position_bias_decoder = bool(mconf.get('use_position_bias_decoder', False))
+    position_bias_mode = mconf.get('position_bias_mode', 'uniform')
+    alpha_pos_fixed = mconf.get('position_bias_alpha', None)
+    if alpha_pos_fixed is not None:
+        alpha_pos_fixed = float(alpha_pos_fixed)
+    position_bias_per_layer = bool(mconf.get('position_bias_per_layer', True))
+
+    pos_token_ids = None
+    if use_position_bias_encoder or use_position_bias_decoder:
+        t2i = getattr(tokenizer, 'token2idx', None)
+        if t2i is not None:
+            pos_keys  = sorted([k for k in t2i if k.startswith('<POS_')],  key=lambda k: t2i[k])
+            beat_keys = sorted([k for k in t2i if k.startswith('<BEAT_')], key=lambda k: t2i[k])
+            if pos_keys and beat_keys:
+                pos_token_ids = {
+                    'pos_start':  t2i[pos_keys[0]],
+                    'pos_end':    t2i[pos_keys[-1]],
+                    'beat_start': t2i[beat_keys[0]],
+                    'beat_end':   t2i[beat_keys[-1]],
+                    'pad':        t2i.get('<PAD>', 0),
+                    'eos':        t2i.get('<EOS>', 1),
+                }
+                print(f'[info] position bias token IDs: {pos_token_ids}')
+            else:
+                print('[warning] POS/BEAT tokens not found in tokenizer; position bias disabled.')
+                use_position_bias_encoder = False
+                use_position_bias_decoder = False
+        else:
+            print('[warning] token2idx not found in tokenizer; position bias disabled.')
+            use_position_bias_encoder = False
+            use_position_bias_decoder = False
+
+    # position bias は token_to_limb_table も必要（musemorphose.py の _pos_ready チェック用）
+    if (use_position_bias_encoder or use_position_bias_decoder) and token_to_limb is None:
+        idx2token = getattr(tokenizer, 'idx2token', None)
+        if idx2token is not None:
+            vocab_list = [idx2token.get(i, '') for i in range(tokenizer.vocab_size)]
+            token_to_limb = build_token_to_limb_map(vocab_list)
+        else:
+            print('[warning] idx2token not found in tokenizer; position bias disabled.')
+            use_position_bias_encoder = False
+            use_position_bias_decoder = False
+            pos_token_ids = None
+
+    return dict(
+        use_limb_bias_encoder=use_limb_bias_encoder,
+        use_limb_bias_decoder=use_limb_bias_decoder,
+        token_to_limb=token_to_limb,
+        alpha_limb_fixed=alpha_limb_fixed,
+        use_position_bias_encoder=use_position_bias_encoder,
+        use_position_bias_decoder=use_position_bias_decoder,
+        position_bias_mode=position_bias_mode,
+        alpha_pos_fixed=alpha_pos_fixed,
+        position_bias_per_layer=position_bias_per_layer,
+        pos_token_ids=pos_token_ids,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +194,7 @@ def _build_model(
     tokenization_method: str,
     device: str,
     runtime_opts_cp: Optional[dict] = None,
+    bias_params: Optional[dict] = None,
 ) -> MuseMorphose:
     common_kwargs = dict(
         d_s_tech_emb=mconf.get('d_s_tech_emb', 32),
@@ -122,6 +210,7 @@ def _build_model(
         use_difficulty=True,
         use_attr_cls=True,
         tokenization_method=tokenization_method,
+        **(bias_params or {}),
     )
 
     if tokenization_method == 'cp_limb_v1':
@@ -186,15 +275,16 @@ def _generate_one(
     tokenize_fn,
     tokenization_method: str,
     midi_path: Path,
-    target_label: Dict[str, int],
+    target_label: Dict[str, Any],
     config: dict,
     device: str,
     bpm: int,
     nucleus_p: float,
     temperature: float,
     runtime_opts_cp: Optional[dict] = None,
-) -> Tuple[Any, str]:
-    """生成済みデータと種別 ('tokens' or 'cp_data') を返す。"""
+    difficulty_bounds: Optional[dict] = None,
+) -> Tuple[Any, str, Dict[str, float]]:
+    """生成済みデータと種別 ('tokens' or 'cp_data') および実効指定難易度を返す。"""
     mode_payload, mode_bar_positions = tokenize_fn(str(midi_path))
     n_bars = len(mode_bar_positions)
 
@@ -206,12 +296,29 @@ def _generate_one(
 
     window_plan = build_window_plan(n_bars, max_bars, max_bars)
 
-    # 指定ラベルを全小節に適用
     bounds = _resolve_difficulty_upper_bounds(config['model'])
-    target_per_bar = {
-        k: np.clip(np.full(n_bars, target_label[k], dtype=np.int64), 0, bounds[k])
-        for k in DIFFICULTY_KEYS
-    }
+    diff_mode = target_label.get('difficulty_mode', 'full_assign')
+
+    if diff_mode in ('global_shift', 'upper_cap'):
+        std_tok = DrumTokenizer()
+        std_tokens, std_bar_pos = std_tok.midi_to_tokens(str(midi_path))
+        base = compute_difficulty_levels(std_tokens, std_bar_pos, difficulty_bounds, bpm)
+        base = {k: np.resize(base[k], n_bars) for k in DIFFICULTY_KEYS}
+        if diff_mode == 'global_shift':
+            target_per_bar = {
+                k: np.clip(base[k] + target_label[k], 0, bounds[k]).astype(np.int64)
+                for k in DIFFICULTY_KEYS
+            }
+        else:  # upper_cap
+            target_per_bar = {
+                k: np.clip(np.minimum(base[k], target_label[k]), 0, bounds[k]).astype(np.int64)
+                for k in DIFFICULTY_KEYS
+            }
+    else:  # full_assign
+        target_per_bar = {
+            k: np.clip(np.full(n_bars, target_label[k], dtype=np.int64), 0, bounds[k])
+            for k in DIFFICULTY_KEYS
+        }
 
     window_results = []
 
@@ -267,12 +374,13 @@ def _generate_one(
         verify_bar_count(ed_bar - st_bar, len(chunks), context=f'bars [{st_bar},{ed_bar})')
         window_results.append((st_bar, ed_bar, chunks))
 
+    specified_diff = {k: float(np.mean(target_per_bar[k])) for k in DIFFICULTY_KEYS}
     if tokenization_method in ('standard', 'remi'):
         merged = merge_window_token_chunks(n_bars, window_results)
-        return merged, 'tokens'
+        return merged, 'tokens', specified_diff
     else:
         merged = merge_window_cp_chunks(n_bars, window_results, tokenizer)
-        return merged, 'cp_data'
+        return merged, 'cp_data', specified_diff
 
 
 # ---------------------------------------------------------------------------
@@ -287,9 +395,10 @@ def phase1_generate(
     tokenization_method: str,
     config: dict,
     device: str,
-    difficulty_labels: List[Dict[str, int]],
+    difficulty_labels: List[Dict[str, Any]],
     output_dir: Path,
     runtime_opts_cp: Optional[dict] = None,
+    difficulty_bounds: Optional[dict] = None,
 ) -> List[Dict]:
     midi_files = sorted(
         list(Path(args.input_midi_dir).glob('*.mid'))
@@ -314,11 +423,12 @@ def phase1_generate(
             print(f'[{done}/{total}] {midi_path.name}  label={label_idx} {label}')
 
             try:
-                gen_data, data_type = _generate_one(
+                gen_data, data_type, specified_diff = _generate_one(
                     model, tokenizer, tokenize_fn, tokenization_method,
                     midi_path, label, config, device, args.bpm,
                     args.nucleus_p, args.temperature,
                     runtime_opts_cp=runtime_opts_cp,
+                    difficulty_bounds=difficulty_bounds,
                 )
                 if data_type == 'tokens':
                     tokens_to_midi(gen_data, str(out_path), bpm=args.bpm)
@@ -330,7 +440,7 @@ def phase1_generate(
                 manifest.append({
                     'input_midi': str(midi_path),
                     'generated_midi': str(out_path),
-                    'specified_difficulty': label,
+                    'specified_difficulty': specified_diff,
                     'label_idx': label_idx,
                 })
                 print(f'  → {out_path}')
@@ -475,7 +585,8 @@ def main():
         if key in ckpt_sd:
             mconf[f'n_s_{attr}_cls'] = int(ckpt_sd[key].size(0))
 
-    model = _build_model(mconf, tokenizer, tokenization_method, device, runtime_opts_cp)
+    bias_params = _resolve_bias_params(mconf, tokenizer)
+    model = _build_model(mconf, tokenizer, tokenization_method, device, runtime_opts_cp, bias_params)
 
     validate_vocabulary_compatibility(tokenization_method, tokenizer, ckpt_sd)
     adapted_sd = adapt_checkpoint_to_model(
@@ -490,6 +601,7 @@ def main():
     manifest = phase1_generate(
         args, model, tokenizer, tokenize_fn, tokenization_method,
         config, device, difficulty_labels, output_dir, runtime_opts_cp,
+        difficulty_bounds=difficulty_bounds,
     )
 
     # フェーズ2: 評価

@@ -24,10 +24,10 @@ checkpoints=(
     "checkpoints_drum_standard-model9-inattn"
     "checkpoints_drum_standard-model10-inattn"
     "checkpoints_drum_standard-model11-inattn"
-    "checkpoints_drum_standard-model12-inattn"
-    "checkpoints_drum_standard-model13-inattn"
-    "checkpoints_drum_standard-model14-inattn"
-    "checkpoints_drum_standard-model15-inattn"
+    # "checkpoints_drum_standard-model12-inattn"
+    # "checkpoints_drum_standard-model13-inattn"
+    # "checkpoints_drum_standard-model14-inattn"
+    # "checkpoints_drum_standard-model15-inattn"
 )
 
 for checkpoint in "${checkpoints[@]}"; do
@@ -35,23 +35,16 @@ for checkpoint in "${checkpoints[@]}"; do
         --input_midi_dir data/test_dataset \
         --model_path trained_model/${checkpoint}/params/best_params.pt \
         --difficulty_labels_file <(echo '[
-            {"s_tech_cls": 0, "s_indep_cls": 0, "s_hand_cls": 0, "s_foot_cls": 0, "s_move_cls": 0},
-            {"s_tech_cls": 2, "s_indep_cls": 2, "s_hand_cls": 2, "s_foot_cls": 2, "s_move_cls": 2},
-            {"s_tech_cls": 4, "s_indep_cls": 4, "s_hand_cls": 4, "s_foot_cls": 4, "s_move_cls": 4},
-            {"s_tech_cls": 6, "s_indep_cls": 6, "s_hand_cls": 6, "s_foot_cls": 6, "s_move_cls": 6},
-            {"s_tech_cls": 7, "s_indep_cls": 7, "s_hand_cls": 7, "s_foot_cls": 7, "s_move_cls": 7},
-            {"s_tech_cls": 0, "s_indep_cls": 4, "s_hand_cls": 4, "s_foot_cls": 4, "s_move_cls": 4},
-            {"s_tech_cls": 7, "s_indep_cls": 4, "s_hand_cls": 4, "s_foot_cls": 4, "s_move_cls": 4},
-            {"s_tech_cls": 4, "s_indep_cls": 0, "s_hand_cls": 4, "s_foot_cls": 4, "s_move_cls": 4},
-            {"s_tech_cls": 4, "s_indep_cls": 7, "s_hand_cls": 4, "s_foot_cls": 4, "s_move_cls": 4},
-            {"s_tech_cls": 4, "s_indep_cls": 4, "s_hand_cls": 0, "s_foot_cls": 4, "s_move_cls": 4},
-            {"s_tech_cls": 4, "s_indep_cls": 4, "s_hand_cls": 7, "s_foot_cls": 4, "s_move_cls": 4},
-            {"s_tech_cls": 4, "s_indep_cls": 4, "s_hand_cls": 4, "s_foot_cls": 0, "s_move_cls": 4},
-            {"s_tech_cls": 4, "s_indep_cls": 4, "s_hand_cls": 4, "s_foot_cls": 7, "s_move_cls": 4},
-            {"s_tech_cls": 4, "s_indep_cls": 4, "s_hand_cls": 4, "s_foot_cls": 4, "s_move_cls": 0},
-            {"s_tech_cls": 4, "s_indep_cls": 4, "s_hand_cls": 4, "s_foot_cls": 4, "s_move_cls": 7}
+            {"difficulty_mode": "global_shift", "s_tech_cls": 2, "s_indep_cls": 2, "s_hand_cls": 2, "s_foot_cls": 2, "s_move_cls": 2},
+            {"difficulty_mode": "global_shift", "s_tech_cls": 1, "s_indep_cls": 1, "s_hand_cls": 1, "s_foot_cls": 1, "s_move_cls": 1},
+            {"difficulty_mode": "global_shift", "s_tech_cls": 0, "s_indep_cls": 0, "s_hand_cls": 0, "s_foot_cls": 0, "s_move_cls": 0},
+            {"difficulty_mode": "global_shift", "s_tech_cls": -1, "s_indep_cls": -1, "s_hand_cls": -1, "s_foot_cls": -1, "s_move_cls": -1},
+            {"difficulty_mode": "global_shift", "s_tech_cls": -2, "s_indep_cls": -2, "s_hand_cls": -2, "s_foot_cls": -2, "s_move_cls": -2},
+            {"difficulty_mode": "upper_cap", "s_tech_cls": 2, "s_indep_cls": 2, "s_hand_cls": 2, "s_foot_cls": 2, "s_move_cls": 2},
+            {"difficulty_mode": "upper_cap", "s_tech_cls": 4, "s_indep_cls": 4, "s_hand_cls": 4, "s_foot_cls": 4, "s_move_cls": 4},
+            {"difficulty_mode": "upper_cap", "s_tech_cls": 6, "s_indep_cls": 6, "s_hand_cls": 6, "s_foot_cls": 6, "s_move_cls": 6}
             ]') \
-        --output_dir output/eval/${checkpoint}
+        --output_dir output/eval-new/${checkpoint}
 done
 
 wait

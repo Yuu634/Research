@@ -1099,6 +1099,55 @@ def main():
             use_limb_bias_encoder = False
             use_limb_bias_decoder = False
 
+    # position bias 用のパラメータと token ID マップを構築
+    use_position_bias_encoder = bool(mconf.get('use_position_bias_encoder', False))
+    use_position_bias_decoder = bool(mconf.get('use_position_bias_decoder', False))
+    position_bias_mode = mconf.get('position_bias_mode', 'uniform')
+    alpha_pos_fixed = mconf.get('position_bias_alpha', None)
+    if alpha_pos_fixed is not None:
+        alpha_pos_fixed = float(alpha_pos_fixed)
+        print(f'[info] position bias alpha: fixed={alpha_pos_fixed}')
+    else:
+        print('[info] position bias alpha: learnable')
+    position_bias_per_layer = bool(mconf.get('position_bias_per_layer', True))
+    pos_token_ids = None
+    if use_position_bias_encoder or use_position_bias_decoder:
+        t2i = getattr(dset, 'token2idx', None)
+        if t2i is not None:
+            pos_keys  = sorted([k for k in t2i if k.startswith('<POS_')],  key=lambda k: t2i[k])
+            beat_keys = sorted([k for k in t2i if k.startswith('<BEAT_')], key=lambda k: t2i[k])
+            if pos_keys and beat_keys:
+                pos_token_ids = {
+                    'pos_start':  t2i[pos_keys[0]],
+                    'pos_end':    t2i[pos_keys[-1]],
+                    'beat_start': t2i[beat_keys[0]],
+                    'beat_end':   t2i[beat_keys[-1]],
+                    'pad':        t2i.get('<PAD>', 0),
+                    'eos':        t2i.get('<EOS>', 1),
+                }
+                print(f'[info] position bias token IDs: {pos_token_ids}')
+            else:
+                print('[warning] POS/BEAT tokens not found in token2idx; position bias disabled.')
+                use_position_bias_encoder = False
+                use_position_bias_decoder = False
+        else:
+            print('[warning] token2idx not found in dataset; position bias disabled.')
+            use_position_bias_encoder = False
+            use_position_bias_decoder = False
+
+    # position bias は token_to_limb_table も必要（forward の _pos_ready チェック用）
+    # limb_bias が無効でも position_bias が有効なら token_to_limb を構築する
+    if (use_position_bias_encoder or use_position_bias_decoder) and token_to_limb is None:
+        idx2token = getattr(dset, 'idx2token', None)
+        if idx2token is not None:
+            vocab_list = [idx2token.get(i, '') for i in range(dset.vocab_size)]
+            token_to_limb = build_token_to_limb_map(vocab_list)
+        else:
+            print('[warning] idx2token not found in dataset; position bias disabled.')
+            use_position_bias_encoder = False
+            use_position_bias_decoder = False
+            pos_token_ids = None
+
     # まずCPU上でモデルを構築
     model = MuseMorphose(
         mconf['enc_n_layer'],
@@ -1150,6 +1199,12 @@ def main():
         use_limb_bias_decoder=use_limb_bias_decoder,
         token_to_limb=token_to_limb,
         alpha_limb_fixed=alpha_limb_fixed,
+        use_position_bias_encoder=use_position_bias_encoder,
+        use_position_bias_decoder=use_position_bias_decoder,
+        position_bias_mode=position_bias_mode,
+        alpha_pos_fixed=alpha_pos_fixed,
+        position_bias_per_layer=position_bias_per_layer,
+        pos_token_ids=pos_token_ids,
     )
 
     # パラメータ数を計算
