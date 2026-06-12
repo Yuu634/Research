@@ -8,5 +8,5 @@ trained_model/*
 
 **/*.tar.gz
 **/*.zip
-**/*.sh.e*
-**/*.sh.o*
+*.sh.e*
+*.sh.o*
