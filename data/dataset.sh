@@ -42,6 +42,7 @@ fi
 
 if [[ " ${create_target[*]} " == *"groove_full"* ]]; then
     echo "Creating Groove Full dataset..."
+    # Groove MIDI Datasetをダウンロードし解凍しておく
     if [ ! -d data/filtered/groove_full ]; then
         python data/cleaning_groove_full.py \
             --groovefull_dir data/raw/e-gmd \

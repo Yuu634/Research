@@ -1,12 +1,7 @@
 echo "性能評価"
 
 checkpoints=(
-    "checkpoints_drum_standard-model1"
-    "checkpoints_drum_standard-model2"
     "checkpoints_drum_standard-model3"
-    "checkpoints_drum_standard-model4"
-    "checkpoints_drum_standard-model5"
-    "checkpoints_drum_standard-model6"
 )
 
 # difficulty_mode: global_shift, upper_cap, full_assign
@@ -22,7 +17,11 @@ for checkpoint in "${checkpoints[@]}"; do
             {"difficulty_mode": "global_shift", "s_tech_cls": -2, "s_indep_cls": -2, "s_hand_cls": -2, "s_foot_cls": -2, "s_move_cls": -2},
             {"difficulty_mode": "upper_cap", "s_tech_cls": 2, "s_indep_cls": 2, "s_hand_cls": 2, "s_foot_cls": 2, "s_move_cls": 2},
             {"difficulty_mode": "upper_cap", "s_tech_cls": 4, "s_indep_cls": 4, "s_hand_cls": 4, "s_foot_cls": 4, "s_move_cls": 4},
-            {"difficulty_mode": "upper_cap", "s_tech_cls": 6, "s_indep_cls": 6, "s_hand_cls": 6, "s_foot_cls": 6, "s_move_cls": 6},
+            {"difficulty_mode": "upper_cap", "s_tech_cls": 6, "s_indep_cls": 6, "s_hand_cls": 6, "s_foot_cls": 6, "s_move_cls": 6}
             ]') \
-        --output_dir output/eval/${checkpoint}
+        --output_dir output/eval-new/${checkpoint}-no_limb_bias_decoder \
+        --no_limb_bias_decoder \
+        # --no_limb_bias_encoder \
+        # --no_position_bias_encoder \
+        # --no_position_bias_decoder
 done

@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from typing import Optional
+from typing import List, Optional
 from src.models.transformer_encoder import VAETransformerEncoder
 from src.models.transformer_helpers import (
   weights_init, PositionalEncoding, HierarchicalDrumPositionalEncoding,
@@ -18,7 +18,9 @@ class VAETransformerDecoder(nn.Module):
                use_position_bias: bool = False,
                position_bias_mode: str = 'uniform',
                alpha_pos_fixed: Optional[float] = None,
-               position_bias_per_layer: bool = True):
+               position_bias_per_layer: bool = True,
+               # ===== Per-layer Bias Schedule =====
+               layer_bias_schedule: Optional[List[str]] = None):
     super(VAETransformerDecoder, self).__init__()
     self.n_layer = n_layer
     self.n_head = n_head
@@ -30,6 +32,7 @@ class VAETransformerDecoder(nn.Module):
     self.cond_mode = cond_mode
     self.use_limb_bias = use_limb_bias
     self.use_position_bias = use_position_bias
+    self.layer_bias_schedule = layer_bias_schedule
 
     if cond_mode == 'in-attn':
       self.seg_emb_proj = nn.Linear(d_seg_emb, d_model, bias=False)
@@ -83,13 +86,22 @@ class VAETransformerDecoder(nn.Module):
       # causal mask をベースに各バイアスを加算
       effective_mask = attn_mask  # [N, N]
 
-      if self.use_limb_bias and limb_bias is not None:
+      # スケジュールが指定されていれば層ごとにバイアス適用可否を決定
+      if self.layer_bias_schedule is not None:
+        entry = self.layer_bias_schedule[i]
+        apply_limb = (entry in ('limb', 'both')) and self.use_limb_bias
+        apply_pos  = (entry in ('position', 'both')) and self.use_position_bias
+      else:
+        apply_limb = self.use_limb_bias
+        apply_pos  = self.use_position_bias
+
+      if apply_limb and limb_bias is not None:
         alpha = (self.alpha_limb_fixed
                  if self.alpha_limb_fixed is not None
                  else self.alpha_limb[i])
         effective_mask = attn_mask.unsqueeze(0) + alpha * limb_bias  # [B*n_heads, N, N]
 
-      if self.use_position_bias and position_bias is not None:
+      if apply_pos and position_bias is not None:
         pos_contrib = self.position_bias_module.get_bias_for_layer(
           i, position_bias, limb_ids_for_pos_bias
         )                                      # [B, N, N]
@@ -150,6 +162,11 @@ class MuseMorphose(nn.Module):
     alpha_pos_fixed: Optional[float] = None,
     position_bias_per_layer: bool = True,
     pos_token_ids: Optional[dict] = None,
+    # ===== Per-layer Bias Schedule =====
+    bias_schedule_encoder: str = 'both',
+    bias_schedule_decoder: str = 'both',
+    bias_schedule_encoder_custom: Optional[List[str]] = None,
+    bias_schedule_decoder_custom: Optional[List[str]] = None,
   ):
     super(MuseMorphose, self).__init__()
     self.enc_n_layer = enc_n_layer
@@ -195,6 +212,15 @@ class MuseMorphose(nn.Module):
     self.use_position_bias_encoder = use_position_bias_encoder
     self.use_position_bias_decoder = use_position_bias_decoder
 
+    # ===== Per-layer Bias Schedule の計算 =====
+    from src.models.bias_schedule import build_layer_bias_schedule
+    enc_layer_bias_schedule = build_layer_bias_schedule(
+      enc_n_layer, bias_schedule_encoder, bias_schedule_encoder_custom
+    )
+    dec_layer_bias_schedule = build_layer_bias_schedule(
+      dec_n_layer, bias_schedule_decoder, bias_schedule_decoder_custom
+    )
+
     needs_limb_table = (use_limb_bias_encoder or use_limb_bias_decoder
                         or use_position_bias_encoder or use_position_bias_decoder)
     if needs_limb_table and token_to_limb is not None:
@@ -225,6 +251,7 @@ class MuseMorphose(nn.Module):
       position_bias_mode=position_bias_mode,
       alpha_pos_fixed=alpha_pos_fixed,
       position_bias_per_layer=position_bias_per_layer,
+      layer_bias_schedule=enc_layer_bias_schedule,
     )
 
     self.use_attr_cls = use_attr_cls
@@ -262,6 +289,7 @@ class MuseMorphose(nn.Module):
         position_bias_mode=position_bias_mode,
         alpha_pos_fixed=alpha_pos_fixed,
         position_bias_per_layer=position_bias_per_layer,
+        layer_bias_schedule=dec_layer_bias_schedule,
       )
 
       # 5つの属性埋め込み層
@@ -292,6 +320,7 @@ class MuseMorphose(nn.Module):
         position_bias_mode=position_bias_mode,
         alpha_pos_fixed=alpha_pos_fixed,
         position_bias_per_layer=position_bias_per_layer,
+        layer_bias_schedule=dec_layer_bias_schedule,
       )
 
       self.d_rfreq_emb = d_rfreq_emb
@@ -317,6 +346,7 @@ class MuseMorphose(nn.Module):
         position_bias_mode=position_bias_mode,
         alpha_pos_fixed=alpha_pos_fixed,
         position_bias_per_layer=position_bias_per_layer,
+        layer_bias_schedule=dec_layer_bias_schedule,
       )
 
       self.rfreq_attr_emb = None

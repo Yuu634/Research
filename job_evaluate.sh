@@ -44,7 +44,11 @@ for checkpoint in "${checkpoints[@]}"; do
             {"difficulty_mode": "upper_cap", "s_tech_cls": 4, "s_indep_cls": 4, "s_hand_cls": 4, "s_foot_cls": 4, "s_move_cls": 4},
             {"difficulty_mode": "upper_cap", "s_tech_cls": 6, "s_indep_cls": 6, "s_hand_cls": 6, "s_foot_cls": 6, "s_move_cls": 6}
             ]') \
-        --output_dir output/eval-new/${checkpoint}
+        --output_dir output/eval-new/${checkpoint} \
+        # --no_limb_bias_encoder \
+        # --no_limb_bias_decoder \
+        # --no_position_bias_encoder \
+        # --no_position_bias_decoder
 done
 
 wait

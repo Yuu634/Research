@@ -181,6 +181,10 @@ def _resolve_bias_params(mconf: dict, tokenizer) -> dict:
         alpha_pos_fixed=alpha_pos_fixed,
         position_bias_per_layer=position_bias_per_layer,
         pos_token_ids=pos_token_ids,
+        bias_schedule_encoder=mconf.get('bias_schedule_encoder', 'both'),
+        bias_schedule_decoder=mconf.get('bias_schedule_decoder', 'both'),
+        bias_schedule_encoder_custom=mconf.get('bias_schedule_encoder_custom', None),
+        bias_schedule_decoder_custom=mconf.get('bias_schedule_decoder_custom', None),
     )
 
 
@@ -537,6 +541,14 @@ def main():
     parser.add_argument('--bpm', type=int, default=120)
     parser.add_argument('--nucleus_p', type=float, default=0.9)
     parser.add_argument('--temperature', type=float, default=1.2)
+    parser.add_argument('--no_limb_bias_encoder', action='store_true',
+                        help='use_limb_bias_encoder を強制的に False にする')
+    parser.add_argument('--no_limb_bias_decoder', action='store_true',
+                        help='use_limb_bias_decoder を強制的に False にする')
+    parser.add_argument('--no_position_bias_encoder', action='store_true',
+                        help='use_position_bias_encoder を強制的に False にする')
+    parser.add_argument('--no_position_bias_decoder', action='store_true',
+                        help='use_position_bias_decoder を強制的に False にする')
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -584,6 +596,16 @@ def main():
         key = f's_{attr}_attr_emb.emb_lookup.weight'
         if key in ckpt_sd:
             mconf[f'n_s_{attr}_cls'] = int(ckpt_sd[key].size(0))
+
+    # limb/position biasを強制的に無効化
+    if args.no_limb_bias_encoder:
+        mconf['use_limb_bias_encoder'] = False
+    if args.no_limb_bias_decoder:
+        mconf['use_limb_bias_decoder'] = False
+    if args.no_position_bias_encoder:
+        mconf['use_position_bias_encoder'] = False
+    if args.no_position_bias_decoder:
+        mconf['use_position_bias_decoder'] = False
 
     bias_params = _resolve_bias_params(mconf, tokenizer)
     model = _build_model(mconf, tokenizer, tokenization_method, device, runtime_opts_cp, bias_params)
