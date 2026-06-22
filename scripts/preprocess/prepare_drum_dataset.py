@@ -174,7 +174,8 @@ def prepare_drum_dataset(
     output_dir: str,
     vocab_path: str,
     file_extension: str = '.midi',
-    tokenization_method: str = 'standard'
+    tokenization_method: str = 'standard',
+    use_limb_tokens: bool = False,
 ):
     """
     MIDIファイルをトークン化してデータセットを準備
@@ -184,6 +185,7 @@ def prepare_drum_dataset(
         output_dir: トークン化されたデータを保存するディレクトリ
         vocab_path: 語彙ファイルの保存先パス
         file_extension: MIDIファイルの拡張子
+        use_limb_tokens: standard モード時に四肢トークンを付与するか（default: False）
     """
     tokenization_method = validate_tokenization_method(
         tokenization_method,
@@ -199,7 +201,7 @@ def prepare_drum_dataset(
     elif tokenization_method == 'remi':
         tokenizer = RemiDrumTokenizer()
     elif tokenization_method == 'standard':
-        tokenizer = DrumTokenizer()
+        tokenizer = DrumTokenizer(use_limb_tokens=use_limb_tokens)
     else:
         raise ValueError(
             f"Unsupported --tokenization_method: {tokenization_method}. "
@@ -431,6 +433,8 @@ def main():
                         help='Random seed for train/val split (default: 42)')
     parser.add_argument('--skip_preparation', action='store_true',
                         help='Skip dataset preparation and only create train/val split')
+    parser.add_argument('--use_limb_tokens', action='store_true',
+                        help='(standard mode only) Prepend a LIMB token before each drum note token')
 
     args = parser.parse_args()
 
@@ -441,7 +445,8 @@ def main():
             output_dir=args.output_dir,
             vocab_path=args.vocab_path,
             file_extension=args.file_extension,
-            tokenization_method=args.tokenization_method
+            tokenization_method=args.tokenization_method,
+            use_limb_tokens=args.use_limb_tokens,
         )
 
     # 訓練/検証セットに分割

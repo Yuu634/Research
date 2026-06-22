@@ -1,7 +1,7 @@
 echo "ドラム譜面難易度修正モデルの学習"
 
 # 変数
-CONFIG_PATH="config/drum_config_standard.yaml" # 学習設定ファイルパス
+CONFIG_PATH="config/drum_config_standard-model5.yaml" # 学習設定ファイルパス
 
 
 # ドラム譜面難易度修正モデルの学習

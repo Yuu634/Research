@@ -23,7 +23,6 @@ DRUM_TO_NOTE = {
     'TOM2': 47,            # B2 (MIDI 47)
     'FLOOR': 43,           # G2 (MIDI 43)
     'HH_CLOSED': 42,       # F#2 (MIDI 42)
-    'HH_HALFOPEN': 44,     # G#2 (MIDI 44)
     'HH_OPEN': 46,         # A#2 (MIDI 46)
     'HH_PEDAL': 44,        # G#2 (MIDI 44)
     'RIDE_BOW': 51,        # D#3 (MIDI 51)
@@ -58,13 +57,15 @@ class DrumToken2MIDI:
         """
         if token.startswith('<') or token in ['<PAD>', '<EOS>']:
             return None
+        if token.startswith('LIMB_'):
+            return None
 
         parts = token.split('_')
         if len(parts) < 3:
             return None
 
         # 楽器名を構築（2単語の可能性がある: HH_CLOSED, RIDE_BOWなど）
-        if parts[1] in ['CLOSED', 'HALFOPEN', 'OPEN', 'PEDAL', 'BOW', 'BELL', 'ACCENT']:
+        if parts[1] in ['CLOSED', 'OPEN', 'PEDAL', 'BOW', 'BELL', 'ACCENT']:
             instrument = f"{parts[0]}_{parts[1]}"
             technique = parts[2]
             velocity_level = '_'.join(parts[3:]) if len(parts) > 3 else 'Normal'

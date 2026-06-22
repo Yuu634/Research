@@ -25,7 +25,7 @@ from collections import defaultdict
 # 例: SNARE_RIM_ACCENT_Normal → drum_type='SNARE_RIM'（2語）
 _TWO_WORD_DRUM_PREFIXES = {
     'SNARE_RIM',
-    'HH_CLOSED', 'HH_PEDAL', 'HH_OPEN', 'HH_HALFOPEN',
+    'HH_CLOSED', 'HH_PEDAL', 'HH_OPEN',
     'TOM_LOW', 'TOM_MID', 'TOM_HIGH',
     'RIDE_CYMBAL', 'RIDE_BELL',
 }
@@ -48,7 +48,7 @@ HAND_INSTRUMENTS = {
     'snare', 'snare_rim',
     'floor',
     'tom_low', 'tom_mid', 'tom_high',
-    'hh_closed', 'hh_halfopen', 'hh_open',
+    'hh_closed', 'hh_open',
     'crash', 'ride_cymbal', 'ride_bell',
     'splash', 'tambourine', 'china', 'cowbell',
 }
@@ -104,7 +104,6 @@ TOKEN_TO_DISTANCE_KEY = {
     'tom_mid':     'mid_tom',
     'tom_high':    'high_tom',
     'hh_closed':   'hihat',
-    'hh_halfopen': 'hihat',
     'hh_open':     'hihat',
     'hh_pedal':    None,           # 足なのでNone
     'ride_cymbal': 'ride_cymbal',
@@ -131,10 +130,10 @@ def compute_s_tech(bar_tokens: List[str]) -> float:
     Returns:
         特殊奏法の割合 (0.0 ~ 1.0)
     """
-    # 演奏トークンのみを抽出（<BAR>, <BEAT_*>, <POS_*> を除外）
+    # 演奏トークンのみを抽出（構造トークンと LIMB トークンを除外）
     note_tokens = [
         t for t in bar_tokens
-        if not (t.startswith('<') and t.endswith('>'))
+        if not (t.startswith('<') and t.endswith('>')) and not t.startswith('LIMB_')
     ]
 
     if len(note_tokens) == 0:
@@ -379,13 +378,24 @@ def compute_s_move(bar_tokens: List[str]) -> float:
     return max_velocity
 
 
+def _extract_bpm_from_bar_tokens(bar_tokens: List[str], default_bpm: float = 120.0) -> float:
+    """bar_tokens 中の <TEMPO_X> トークンから BPM を取得する。見つからない場合は default_bpm を返す。"""
+    for token in bar_tokens:
+        if token.startswith('<TEMPO_') and token.endswith('>'):
+            try:
+                return float(token[7:-1])
+            except ValueError:
+                pass
+    return default_bpm
+
+
 def compute_all_difficulty_scores(bar_tokens: List[str], bpm: float = 120.0) -> Dict[str, float]:
     """
     1小節のすべての難易度指標を計算
 
     Args:
         bar_tokens: 1小節分のトークン列
-        bpm: テンポ (BPM)
+        bpm: テンポのフォールバック値 (BPM)。bar_tokens に <TEMPO_X> トークンがあればそちらを優先する。
 
     Returns:
         {
@@ -396,11 +406,12 @@ def compute_all_difficulty_scores(bar_tokens: List[str], bpm: float = 120.0) -> 
             's_move': float
         }
     """
+    actual_bpm = _extract_bpm_from_bar_tokens(bar_tokens, default_bpm=bpm)
     return {
         's_tech': compute_s_tech(bar_tokens),
         's_indep': compute_s_indep(bar_tokens),
-        's_hand': compute_s_hand(bar_tokens, bpm),
-        's_foot': compute_s_foot(bar_tokens, bpm),
+        's_hand': compute_s_hand(bar_tokens, actual_bpm),
+        's_foot': compute_s_foot(bar_tokens, actual_bpm),
         's_move': compute_s_move(bar_tokens)
     }
 

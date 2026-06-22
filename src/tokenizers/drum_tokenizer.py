@@ -48,6 +48,28 @@ DRUM_NOTE_MAP = {
     59: ('RIDE_CYMBAL', 'HIT'),  # Ride cymbal 2    
 }
 
+# drum_type → LIMB トークン文字列のマッピング
+# HH_OPEN/HH_CLOSED は通常時 LIMB_HAND だが、状態切り替え時は midi_to_tokens() 内で上書きする
+_DRUM_TYPE_TO_LIMB_TOKEN: Dict[str, str] = {
+    'SNARE':       'LIMB_HAND',
+    'SNARE_RIM':   'LIMB_HAND',
+    'FLOOR':       'LIMB_HAND',
+    'TOM_LOW':     'LIMB_HAND',
+    'TOM_MID':     'LIMB_HAND',
+    'TOM_HIGH':    'LIMB_HAND',
+    'HH_CLOSED':   'LIMB_HAND',
+    'HH_OPEN':     'LIMB_HAND',
+    'RIDE_CYMBAL': 'LIMB_HAND',
+    'RIDE_BELL':   'LIMB_HAND',
+    'CRASH':       'LIMB_HAND',
+    'CHINA':       'LIMB_HAND',
+    'SPLASH':      'LIMB_HAND',
+    'TAMBOURINE':  'LIMB_HAND',
+    'COWBELL':     'LIMB_HAND',
+    'KICK':        'LIMB_RFOOT',
+    'HH_PEDAL':    'LIMB_LFOOT',
+}
+
 # 各楽器の標準ピッチマッピング：複数のピッチをまとめる
 # これにより、往復変換でピッチが保持される
 STANDARD_PITCH_MAP = {
@@ -74,7 +96,8 @@ STANDARD_PITCH_MAP = {
 class DrumTokenizer:
     """ドラム譜トークナイザー"""
 
-    def __init__(self):
+    def __init__(self, use_limb_tokens: bool = False):
+        self.use_limb_tokens = use_limb_tokens
         self.vocab = self._build_vocabulary()
         self.token2idx = {token: idx for idx, token in enumerate(self.vocab)}
         self.idx2token = {idx: token for token, idx in self.token2idx.items()}
@@ -130,7 +153,6 @@ class DrumTokenizer:
             vocab.append(f'HH_CLOSED_HIT_{vel}')
         for vel in ['Normal', 'Accent']:
             vocab.extend([
-                f'HH_HALFOPEN_HIT_{vel}',
                 f'HH_OPEN_HIT_{vel}',
                 f'HH_PEDAL_HIT_{vel}'
             ])
@@ -146,6 +168,10 @@ class DrumTokenizer:
             for vel in ['Normal', 'Accent']:
                 vocab.append(f'{cymbal}_HIT_{vel}')
             vocab.append(f'{cymbal}_CHOKE')
+
+        # 四肢トークン（use_limb_tokens=True の場合のみ追加）
+        if self.use_limb_tokens:
+            vocab.extend(['LIMB_HAND', 'LIMB_RFOOT', 'LIMB_LFOOT', 'LIMB_HAND_LFOOT'])
 
         return vocab
 
@@ -344,6 +370,7 @@ class DrumTokenizer:
 
         tokens = []
         bar_positions = []
+        hh_state = 'CLOSED'  # ハイハット初期状態（ペダル踏み込み済み）
 
         for bar in range(n_bars):
             bar_positions.append(len(tokens))
@@ -401,7 +428,7 @@ class DrumTokenizer:
                         if token not in self.token2idx:
                             continue
 
-                    events.append((beat, pos_in_beat, tick_in_bar, token, 'note'))
+                    events.append((beat, pos_in_beat, tick_in_bar, token, 'note', drum_type))
 
                 # チョークイベントの追加
                 if note_idx in chokes:
@@ -415,7 +442,7 @@ class DrumTokenizer:
                         choke_token = f'{drum_type}_CHOKE'
 
                         if choke_token in self.token2idx:
-                            events.append((beat, pos_in_beat, tick_in_bar, choke_token, 'choke'))
+                            events.append((beat, pos_in_beat, tick_in_bar, choke_token, 'choke', drum_type))
 
             # イベントをソート（拍 > 位置 > 楽器の優先順位）
             events.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
@@ -424,7 +451,7 @@ class DrumTokenizer:
             current_beat = -1
             current_pos = -1
 
-            for beat, pos_in_beat, tick_in_bar, token, event_type in events:
+            for beat, pos_in_beat, tick_in_bar, token, event_type, drum_type in events:
                 # 拍トークン
                 if beat != current_beat:
                     tokens.append(f'<BEAT_{beat + 1}>')
@@ -435,6 +462,21 @@ class DrumTokenizer:
                 if pos_in_beat != current_pos:
                     tokens.append(f'<POS_{pos_in_beat}>')
                     current_pos = pos_in_beat
+
+                # LIMB トークン（use_limb_tokens=True かつ note イベントのみ）
+                if self.use_limb_tokens and event_type == 'note':
+                    limb_token = _DRUM_TYPE_TO_LIMB_TOKEN.get(drum_type, 'LIMB_HAND')
+                    if drum_type == 'HH_OPEN' and hh_state == 'CLOSED':
+                        limb_token = 'LIMB_HAND_LFOOT'
+                        hh_state = 'OPEN'
+                    elif drum_type == 'HH_CLOSED' and hh_state == 'OPEN':
+                        limb_token = 'LIMB_HAND_LFOOT'
+                        hh_state = 'CLOSED'
+                    elif drum_type == 'HH_OPEN':
+                        hh_state = 'OPEN'
+                    elif drum_type == 'HH_CLOSED':
+                        hh_state = 'CLOSED'
+                    tokens.append(limb_token)
 
                 # 演奏トークン
                 tokens.append(token)
@@ -466,6 +508,7 @@ class DrumTokenizer:
                 {
                     'tokenization_method': 'standard',
                     'schema_version': 1,
+                    'use_limb_tokens': self.use_limb_tokens,
                     'token2idx': self.token2idx,
                     'idx2token': self.idx2token,
                 },

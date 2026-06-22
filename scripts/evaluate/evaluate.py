@@ -73,8 +73,6 @@ from scripts.evaluate.metrics.groove_similarity import (
 from scripts.evaluate.metrics.token_iou import token_iou
 from scripts.evaluate.metrics.spearman import compute_spearman_metrics
 
-DEFAULT_DIFFICULTY_BOUNDS = 'data/metadata/difficulty_bounds_standard.pkl'
-
 
 # ---------------------------------------------------------------------------
 # 難易度ラベル読み込み
@@ -529,11 +527,10 @@ def main():
     parser = argparse.ArgumentParser(description='Drum generation evaluation')
     parser.add_argument('--input_midi_dir', required=True, help='入力MIDIディレクトリ')
     parser.add_argument('--model_path', required=True, help='モデルチェックポイントパス')
+    parser.add_argument('--difficulty_bounds', required=True, help='難易度境界値pklファイル')
     parser.add_argument('--difficulty_labels_file', required=True,
                         help='難易度ラベルリストJSONファイル')
     parser.add_argument('--output_dir', required=True, help='出力ディレクトリ')
-    parser.add_argument('--difficulty_bounds', default=DEFAULT_DIFFICULTY_BOUNDS,
-                        help='難易度境界値pklファイル')
     parser.add_argument('--alpha', type=float, default=0.7,
                         help='Groove Similarity における Rhythm Similarity の重み (default: 0.7)')
     parser.add_argument('--beta', type=float, default=0.3,

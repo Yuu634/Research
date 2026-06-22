@@ -11,6 +11,7 @@ Limb ID 定義:
   1: Hand  (SNARE, TOM, HH_CLOSED, HH_OPEN, RIDE, CRASH 等)
   2: Right_Foot (KICK)
   3: Left_Foot  (HH_PEDAL)
+  4: Hand + Left_Foot (HH_OPEN/CLOSED の状態切り替え時)
 """
 
 from typing import Dict, List
@@ -21,14 +22,20 @@ import torch
 # ---------------------------------------------------------------------------
 # Limb ID 定数
 # ---------------------------------------------------------------------------
-LIMB_META  = 0
-LIMB_HAND  = 1
-LIMB_RFOOT = 2
-LIMB_LFOOT = 3
+LIMB_META       = 0
+LIMB_HAND       = 1
+LIMB_RFOOT      = 2
+LIMB_LFOOT      = 3
+LIMB_HAND_LFOOT = 4  # HH_OPEN/CLOSED 切り替え時（手と左足の同時動作）
 
 # トークン文字列の前置詞 → Limb ID
 # build_token_to_limb_map() が長いプレフィックス優先でマッチする
 _PREFIX_TO_LIMB: Dict[str, int] = {
+    # 明示的 LIMB トークン（長いプレフィックスを先に登録）
+    "LIMB_HAND_LFOOT": LIMB_HAND_LFOOT,
+    "LIMB_HAND":       LIMB_HAND,
+    "LIMB_RFOOT":      LIMB_RFOOT,
+    "LIMB_LFOOT":      LIMB_LFOOT,
     # Hand (1) ── 手でストロークする楽器
     "SNARE_RIM":   LIMB_HAND,
     "SNARE":       LIMB_HAND,
@@ -37,7 +44,6 @@ _PREFIX_TO_LIMB: Dict[str, int] = {
     "TOM_MID":     LIMB_HAND,
     "TOM_HIGH":    LIMB_HAND,
     "HH_CLOSED":   LIMB_HAND,   # 手で叩く（足はペダルで別管理）
-    "HH_HALFOPEN": LIMB_HAND,   # 手で叩く
     "HH_OPEN":     LIMB_HAND,   # 手で叩く
     "RIDE_CYMBAL": LIMB_HAND,
     "RIDE_BELL":   LIMB_HAND,
@@ -124,7 +130,12 @@ def build_limb_bias_mask(
     ids_j = limb_ids.unsqueeze(1)   # [B, 1, N]
 
     # 同一 Limb かどうか
-    same_limb = (ids_i == ids_j).float()    # [B, N, N]
+    # LIMB_HAND_LFOOT(4) は LIMB_HAND(1) および LIMB_LFOOT(3) の両方とマッチする
+    same_limb = (
+        (ids_i == ids_j) |
+        ((ids_i == LIMB_HAND_LFOOT) & ((ids_j == LIMB_HAND) | (ids_j == LIMB_LFOOT))) |
+        ((ids_j == LIMB_HAND_LFOOT) & ((ids_i == LIMB_HAND) | (ids_i == LIMB_LFOOT)))
+    ).float()   # [B, N, N]
 
     # どちらかが LIMB_META(0) のペアを排除
     has_meta = ((ids_i == 0) | (ids_j == 0)).float()   # [B, N, N]
