@@ -7,6 +7,9 @@ E-GMD データセットをsplit別に保存する。
 使用方法:
   python3 cleaning_groove_full.py --groovefull_dir data/raw/groove_full --output_dir data/filtered
 
+オプション:
+  --dedup_id  同じ id を持つ行は最初の midi_filename のみ追加し、残りをスキップする
+
 出力先: <output_dir>/groove_full/{train,validation,test}/
 """
 
@@ -28,8 +31,13 @@ def parse_args():
     )
     parser.add_argument(
         "--output_dir",
-        default="data/filtered",
-        help="保存先ディレクトリ (デフォルト: data/filtered)",
+        default="data/filtered/groove_full",
+        help="保存先ディレクトリ (デフォルト: data/filtered/groove_full)",
+    )
+    parser.add_argument(
+        "--dedup_id",
+        action="store_true",
+        help="同じ id を持つ行は最初の midi_filename のみ処理し、重複分をスキップする",
     )
     return parser.parse_args()
 
@@ -57,14 +65,24 @@ def main():
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"CSVファイルが見つかりません: {csv_path}")
 
-    stats = {"total": 0, "skipped_ts": 0, "skipped_invalid": 0, "skipped_missing": 0, "saved": 0}
+    stats = {"total": 0, "skipped_ts": 0, "skipped_invalid": 0, "skipped_missing": 0,
+             "skipped_dup_id": 0, "saved": 0}
 
     with open(csv_path, encoding="utf-8") as f:
         reader = csv.DictReader(f)
         rows = list(reader)
 
+    seen_ids: set = set()
+
     for row in rows:
         stats["total"] += 1
+
+        if args.dedup_id:
+            row_id = row["id"]
+            if row_id in seen_ids:
+                stats["skipped_dup_id"] += 1
+                continue
+            seen_ids.add(row_id)
 
         if row["time_signature"] != "4-4":
             stats["skipped_ts"] += 1
@@ -84,7 +102,7 @@ def main():
             continue
 
         split = row["split"]
-        out_dir = os.path.join(args.output_dir, "groove_full", split)
+        out_dir = os.path.join(args.output_dir, split)
         os.makedirs(out_dir, exist_ok=True)
 
         filename = os.path.basename(row["midi_filename"])
@@ -97,6 +115,8 @@ def main():
     print(f"  スキップ (4/4以外): {stats['skipped_ts']} 件")
     print(f"  スキップ (is_valid失敗): {stats['skipped_invalid']} 件")
     print(f"  スキップ (ファイル未発見): {stats['skipped_missing']} 件")
+    if args.dedup_id:
+        print(f"  スキップ (id重複): {stats['skipped_dup_id']} 件")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,14 @@
 #!/bin/bash
 
 # 作成するデータセット指定
-create_target=(groove_full) #(groove groove_full slakh2100 gigamidi)
+create_target=(groove_augment) #(groove groove_full groove_augment lakh slakh2100 gigamidi)
+
+if [[ " ${create_target[*]} " == *"lakh"* ]]; then
+    echo "Creating Lakh dataset..."
+    python data/cleaning_lakhmidi.py \
+      --lakhmidi_dir data/raw/lmd_full \
+      --output_dir data/filtered/lakhmidi
+fi
 
 if [[ " ${create_target[*]} " == *"slakh2100"* ]]; then
     echo "Creating Slakh2100 dataset..."
@@ -40,13 +47,30 @@ if [[ " ${create_target[*]} " == *"gigamidi"* ]]; then
     fi
 fi
 
+if [[ " ${create_target[*]} " == *"groove_augment"* ]]; then
+    echo "Creating Groove Augment dataset..."
+    # Groove MIDI Datasetをダウンロードしておく
+    if [ ! -d data/filtered/groove_augment ]; then
+        python data/cleaning_groove_full.py \
+            --groovefull_dir data/raw/e-gmd \
+            --output_dir data/filtered/groove_cleaning \
+            --dedup_id #重複idデータ削除
+        
+        python data/augment_drum_midi.py \
+        --input_dir data/filtered/groove_cleaning \
+        --output_dir data/filtered/groove_augment \
+        --augment_hihat \
+        --augment_location
+    fi
+fi
+
 if [[ " ${create_target[*]} " == *"groove_full"* ]]; then
     echo "Creating Groove Full dataset..."
     # Groove MIDI Datasetをダウンロードし解凍しておく
     if [ ! -d data/filtered/groove_full ]; then
         python data/cleaning_groove_full.py \
             --groovefull_dir data/raw/e-gmd \
-            --output_dir data/filtered
+            --output_dir data/filtered/groove_full
     fi
 fi
 

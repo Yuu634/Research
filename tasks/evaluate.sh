@@ -1,20 +1,22 @@
 echo "性能評価"
 
 checkpoints=(
-    "checkpoints_drum_standard-model1"
-    # "checkpoints_drum_standard-model5-1"
-    # "checkpoints_drum_standard-model5-2"
-    # "checkpoints_drum_standard-model5-3"
-    # "checkpoints_drum_standard-model5-4"
-    # "checkpoints_drum_standard-model5-5"
+    "checkpoints_drum_standard-lakh1-kl5"
+    "checkpoints_drum_standard-lakh1-kl6"
+    "checkpoints_drum_standard-lakh2-kl6"
+    "checkpoints_drum_standard-lakh3-kl6"
+    "checkpoints_drum_standard-lakh4-kl6"
+    "checkpoints_drum_standard-lakh5-kl6"
 )
+
+model_kind="lakh"
 
 # difficulty_mode: global_shift, upper_cap, full_assign
 for checkpoint in "${checkpoints[@]}"; do
     python -m scripts.evaluate.evaluate \
         --input_midi_dir data/test_dataset \
         --model_path trained_model/${checkpoint}/params/best_params.pt \
-        --difficulty_bounds data/metadata_new/difficulty_bounds_standard.pkl \
+        --difficulty_bounds data/metadata_new/difficulty_bounds_standard-${model_kind}.pkl \
         --difficulty_labels_file <(echo '[
             {"difficulty_mode": "global_shift", "s_tech_cls": 2, "s_indep_cls": 2, "s_hand_cls": 2, "s_foot_cls": 2, "s_move_cls": 2},
             {"difficulty_mode": "global_shift", "s_tech_cls": 1, "s_indep_cls": 1, "s_hand_cls": 1, "s_foot_cls": 1, "s_move_cls": 1},

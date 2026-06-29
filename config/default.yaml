@@ -43,6 +43,7 @@ training:
     ckpt_interval:    50
     log_interval:     10
     val_interval:     50
+    val_n_rounds:     1
 
 generate:
     temperature:                1.2

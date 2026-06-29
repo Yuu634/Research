@@ -108,3 +108,4 @@ training:
   ckpt_interval: 5000                     # チェックポイント保存間隔
   log_interval: 100                       # ログ記録間隔
   val_interval: 2000                      # 検証実行間隔
+  val_n_rounds: 1                           # 検証時のラウンド数

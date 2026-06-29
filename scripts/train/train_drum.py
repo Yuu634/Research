@@ -789,6 +789,7 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
 def validate(model, dloader, config, n_rounds=8):
     """モデルの検証"""
     model.eval()
+    n_rounds = config['training'].get('val_n_rounds', n_rounds)
     device = config['training']['device']
     use_difficulty = config['model'].get('use_difficulty', False)
     tokenization_method = config['data'].get('tokenization_method', 'standard')

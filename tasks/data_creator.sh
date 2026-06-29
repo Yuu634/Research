@@ -1,8 +1,9 @@
-for TOKENIZATION_METHOD in "standard-new"; do
+for TOKENIZATION_METHOD in "standard-lakh"; do
     echo "=== トークン化手法: ${TOKENIZATION_METHOD} ==="
     
     echo "=== 変数設定 ==="
-    OPEN_DATASET_DIR="data/raw/e-gmd" # ドラム譜面の公開データセットディレクトリ
+    OPEN_DATASET_DIR="data/raw/e-gmd"           # ドラム譜面の公開データセットディレクトリ
+    LAKH_DATASET_DIR="data/filtered/lakhmidi"
     DRUM_DATASET_DIR="data/processed_new/drum_dataset_${TOKENIZATION_METHOD}" # 難易度ラベル付与前データセットパス
     DRUM_VOCAB_PATH="data/metadata_new/drum_vocab_${TOKENIZATION_METHOD}.pkl" # ドラム譜面の語彙ファイルパス
     DIFFICULTY_BOUNDS_PATH="data/metadata_new/difficulty_bounds_${TOKENIZATION_METHOD}.pkl" # 難易度の境界値を保存するファイルパス
@@ -11,11 +12,11 @@ for TOKENIZATION_METHOD in "standard-new"; do
 
     echo "=== MIDIデータセットからpklデータセットを作成 ==="
     python -m scripts.preprocess.prepare_drum_dataset \
-        --midi_dir ${OPEN_DATASET_DIR} \
+        --midi_dir ${OPEN_DATASET_DIR} ${LAKH_DATASET_DIR} \
         --output_dir ${DRUM_DATASET_DIR} \
         --vocab_path ${DRUM_VOCAB_PATH} \
         --tokenization_method "standard" \
-        --file_extension .midi \
+        --file_extension .midi .mid \
         --train_ratio 0.9 \
         #--use_limb_tokens \
 

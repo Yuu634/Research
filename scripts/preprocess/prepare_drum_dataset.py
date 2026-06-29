@@ -170,22 +170,25 @@ class RemiDrumTokenizer:
 
 
 def prepare_drum_dataset(
-    midi_dir: str,
+    midi_dirs: list,
     output_dir: str,
     vocab_path: str,
     file_extension: str = '.midi',
     tokenization_method: str = 'standard',
     use_limb_tokens: bool = False,
-):
+) -> list:
     """
     MIDIファイルをトークン化してデータセットを準備
 
     Args:
-        midi_dir: MIDIファイルが格納されているディレクトリ
+        midi_dirs: MIDIファイルが格納されているディレクトリのリスト
         output_dir: トークン化されたデータを保存するディレクトリ
         vocab_path: 語彙ファイルの保存先パス
         file_extension: MIDIファイルの拡張子
         use_limb_tokens: standard モード時に四肢トークンを付与するか（default: False）
+
+    Returns:
+        files_per_dir: dir ごとの出力ファイル名リスト（create_train_val_split に渡す）
     """
     tokenization_method = validate_tokenization_method(
         tokenization_method,
@@ -231,17 +234,9 @@ def prepare_drum_dataset(
     )
     print(f"Tokenization metadata saved to: {metadata_path}")
 
-    # MIDIファイルのリストを取得
-    midi_files = list(Path(midi_dir).rglob(f'*{file_extension}'))
-    print(f"\nFound {len(midi_files)} MIDI files")
-
-    if len(midi_files) == 0:
-        print(f"Warning: No MIDI files found in {midi_dir}")
-        return
-
-    # 統計情報
+    # 全 dir の統計情報（合算）
     stats = {
-        'total_files': len(midi_files),
+        'total_files': 0,
         'successful': 0,
         'failed': 0,
         'total_tokens': 0,
@@ -255,56 +250,76 @@ def prepare_drum_dataset(
         'remi_files_with_non_drum_excluded': 0,
     }
 
-    # 各MIDIファイルを処理
-    print("\nProcessing MIDI files...")
     failed_files = []
+    files_per_dir = []
+    global_counter = 0
 
-    for i, midi_file in enumerate(tqdm(midi_files)):
-        try:
-            if tokenization_method == 'cp_limb_v1':
-                cp_data, bar_positions = tokenizer.midi_to_cp_data(str(midi_file))
-                n_tokens = len(cp_data['cp_type'])
-            else:
-                # MIDIをトークン列に変換
-                tokens, bar_positions = tokenizer.midi_to_tokens(str(midi_file))
+    for dir_idx, midi_dir in enumerate(midi_dirs):
+        # MIDIファイルのリストを取得
+        extensions = [file_extension] if isinstance(file_extension, str) else file_extension
+        midi_files = []
+        for ext in extensions:
+            midi_files.extend(Path(midi_dir).rglob(f'*{ext}'))
+        midi_files = sorted(set(midi_files))
+        print(f"\n[{dir_idx + 1}/{len(midi_dirs)}] {midi_dir}: Found {len(midi_files)} MIDI files")
 
-                if tokenization_method == 'remi':
-                    info = getattr(tokenizer, 'last_conversion_info', {})
-                    excluded_non_drum = int(info.get('non_drum_tracks_excluded', 0))
-                    stats['remi_drum_tracks_used_total'] += int(info.get('drum_track_count', 0))
-                    stats['remi_non_drum_tracks_excluded_total'] += excluded_non_drum
-                    if excluded_non_drum > 0:
-                        stats['remi_files_with_non_drum_excluded'] += 1
-
-                # インデックス列に変換
-                token_indices = tokenizer.tokens_to_indices(tokens)
-                n_tokens = len(token_indices)
-
-            # 統計を更新
-            n_bars = len(bar_positions)
-
-            stats['successful'] += 1
-            stats['total_tokens'] += n_tokens
-            stats['total_bars'] += n_bars
-            stats['token_lengths'].append(n_tokens)
-            stats['bar_counts'].append(n_bars)
-
-            # ファイル名を生成（連番）
-            output_filename = f"{i:06d}.pkl"
-            output_path = os.path.join(output_dir, output_filename)
-
-            # データを保存
-            with open(output_path, 'wb') as f:
-                if tokenization_method == 'cp_limb_v1':
-                    pickle.dump((bar_positions, cp_data), f)
-                else:
-                    pickle.dump((bar_positions, token_indices.tolist()), f)
-
-        except Exception as e:
-            stats['failed'] += 1
-            failed_files.append((str(midi_file), str(e)))
-            print(f"\nError processing {midi_file}: {e}")
+        if len(midi_files) == 0:
+            print(f"Warning: No MIDI files found in {midi_dir}")
+            files_per_dir.append([])
             continue
+
+        stats['total_files'] += len(midi_files)
+
+        # この dir の出力ファイル名を追跡
+        dir_output_files = []
+
+        print("Processing MIDI files...")
+        for midi_file in tqdm(midi_files):
+            try:
+                if tokenization_method == 'cp_limb_v1':
+                    cp_data, bar_positions = tokenizer.midi_to_cp_data(str(midi_file))
+                    n_tokens = len(cp_data['cp_type'])
+                else:
+                    tokens, bar_positions = tokenizer.midi_to_tokens(str(midi_file))
+
+                    if tokenization_method == 'remi':
+                        info = getattr(tokenizer, 'last_conversion_info', {})
+                        excluded_non_drum = int(info.get('non_drum_tracks_excluded', 0))
+                        stats['remi_drum_tracks_used_total'] += int(info.get('drum_track_count', 0))
+                        stats['remi_non_drum_tracks_excluded_total'] += excluded_non_drum
+                        if excluded_non_drum > 0:
+                            stats['remi_files_with_non_drum_excluded'] += 1
+
+                    token_indices = tokenizer.tokens_to_indices(tokens)
+                    n_tokens = len(token_indices)
+
+                n_bars = len(bar_positions)
+
+                stats['successful'] += 1
+                stats['total_tokens'] += n_tokens
+                stats['total_bars'] += n_bars
+                stats['token_lengths'].append(n_tokens)
+                stats['bar_counts'].append(n_bars)
+
+                output_filename = f"{global_counter:06d}.pkl"
+                output_path = os.path.join(output_dir, output_filename)
+
+                with open(output_path, 'wb') as f:
+                    if tokenization_method == 'cp_limb_v1':
+                        pickle.dump((bar_positions, cp_data), f)
+                    else:
+                        pickle.dump((bar_positions, token_indices.tolist()), f)
+
+                dir_output_files.append(output_filename)
+                global_counter += 1
+
+            except Exception as e:
+                stats['failed'] += 1
+                failed_files.append((str(midi_file), str(e)))
+                print(f"\nError processing {midi_file}: {e}")
+                continue
+
+        files_per_dir.append(dir_output_files)
 
     # 統計情報を計算
     if stats['successful'] > 0:
@@ -322,6 +337,11 @@ def prepare_drum_dataset(
     print(f"Total bars:               {stats['total_bars']}")
     print(f"Avg tokens per file:      {stats['avg_tokens_per_file']:.2f}")
     print(f"Avg bars per file:        {stats['avg_bars_per_file']:.2f}")
+
+    if len(midi_dirs) > 1:
+        print(f"\nPer-directory counts:")
+        for midi_dir, dir_files in zip(midi_dirs, files_per_dir):
+            print(f"  {midi_dir}: {len(dir_files)} files")
 
     if stats['token_lengths']:
         print(f"\nToken length statistics:")
@@ -360,42 +380,66 @@ def prepare_drum_dataset(
 
     print("=" * 60)
 
+    return files_per_dir
+
 
 def create_train_val_split(
     data_dir: str,
     train_ratio: float = 0.9,
-    seed: int = 42
+    seed: int = 42,
+    files_per_dir: list = None,
+    train_ratios: list = None,
 ):
     """
     データセットを訓練/検証セットに分割
 
     Args:
         data_dir: トークン化されたデータが保存されているディレクトリ
-        train_ratio: 訓練データの割合
+        train_ratio: 訓練データの割合（files_per_dir 未指定時に使用）
         seed: ランダムシード
+        files_per_dir: dir ごとの出力ファイル名リスト（prepare_drum_dataset の戻り値）
+        train_ratios: dir ごとの train_ratio リスト（files_per_dir と同じ長さ）
     """
     np.random.seed(seed)
 
-    # すべてのpickleファイルを取得
-    pkl_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.pkl') and f != 'dataset_stats.pkl'])
+    train_files = []
+    val_files = []
 
-    if len(pkl_files) == 0:
-        print(f"No pickle files found in {data_dir}")
-        return
+    if files_per_dir is not None:
+        # dir ごとに独立してシャッフル・分割し、その後結合
+        if train_ratios is None:
+            train_ratios = [train_ratio] * len(files_per_dir)
 
-    print(f"\nFound {len(pkl_files)} data files")
+        print(f"\nPer-directory train/val split:")
+        for i, (dir_files, ratio) in enumerate(zip(files_per_dir, train_ratios)):
+            if len(dir_files) == 0:
+                continue
+            rng = np.random.RandomState(seed + i)
+            shuffled = list(dir_files)
+            rng.shuffle(shuffled)
+            n_train = int(len(shuffled) * ratio)
+            train_files.extend(shuffled[:n_train])
+            val_files.extend(shuffled[n_train:])
+            print(f"  Dir {i + 1}: {len(shuffled[:n_train])} train / {len(shuffled[n_train:])} val  (ratio={ratio})")
+    else:
+        # 後方互換: 全ファイルを一括シャッフル → 分割
+        pkl_files = sorted([
+            f for f in os.listdir(data_dir)
+            if f.endswith('.pkl') and f not in ('dataset_stats.pkl', 'train_split.pkl', 'val_split.pkl')
+        ])
 
-    # シャッフル
-    indices = np.arange(len(pkl_files))
-    np.random.shuffle(indices)
+        if len(pkl_files) == 0:
+            print(f"No pickle files found in {data_dir}")
+            return
 
-    # 分割
-    n_train = int(len(pkl_files) * train_ratio)
-    train_indices = indices[:n_train]
-    val_indices = indices[n_train:]
+        print(f"\nFound {len(pkl_files)} data files")
 
-    train_files = [pkl_files[i] for i in train_indices]
-    val_files = [pkl_files[i] for i in val_indices]
+        indices = np.arange(len(pkl_files))
+        np.random.shuffle(indices)
+
+        n_train = int(len(pkl_files) * train_ratio)
+        train_files = [pkl_files[i] for i in indices[:n_train]]
+        val_files = [pkl_files[i] for i in indices[n_train:]]
 
     # 分割情報を保存
     train_split_path = os.path.join(data_dir, 'train_split.pkl')
@@ -407,28 +451,31 @@ def create_train_val_split(
     with open(val_split_path, 'wb') as f:
         pickle.dump(val_files, f)
 
+    total = len(train_files) + len(val_files)
+    actual_ratio = len(train_files) / total if total > 0 else 0.0
     print(f"\nTrain/Val split created:")
-    print(f"  Train: {len(train_files)} files ({train_ratio*100:.1f}%)")
-    print(f"  Val:   {len(val_files)} files ({(1-train_ratio)*100:.1f}%)")
+    print(f"  Train: {len(train_files)} files ({actual_ratio * 100:.1f}%)")
+    print(f"  Val:   {len(val_files)} files ({(1 - actual_ratio) * 100:.1f}%)")
     print(f"  Train split saved to: {train_split_path}")
     print(f"  Val split saved to:   {val_split_path}")
 
 
 def main():
     parser = argparse.ArgumentParser(description='Prepare drum MIDI dataset for training')
-    parser.add_argument('--midi_dir', type=str, required=True,
-                        help='Directory containing MIDI files')
+    parser.add_argument('--midi_dir', type=str, nargs='+', required=True,
+                        help='Directory (or directories) containing MIDI files')
     parser.add_argument('--output_dir', type=str, required=True,
                         help='Output directory for tokenized data')
     parser.add_argument('--vocab_path', type=str, default='drum_vocab.pkl',
                         help='Path to save vocabulary file')
-    parser.add_argument('--file_extension', type=str, default='.midi',
-                        help='MIDI file extension (default: .midi)')
+    parser.add_argument('--file_extension', type=str, nargs='+', default=['.midi'],
+                        help='MIDI file extension(s) (default: .midi)')
     parser.add_argument('--tokenization_method', type=str, default='standard',
                         choices=['standard', 'cp_limb_v1', 'remi'],
                         help='Tokenization method (default: standard)')
-    parser.add_argument('--train_ratio', type=float, default=0.9,
-                        help='Ratio of training data (default: 0.9)')
+    parser.add_argument('--train_ratio', type=float, nargs='+', default=[0.9],
+                        help='Ratio of training data. One value (applied to all dirs) '
+                             'or one per --midi_dir (default: 0.9)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for train/val split (default: 42)')
     parser.add_argument('--skip_preparation', action='store_true',
@@ -438,10 +485,22 @@ def main():
 
     args = parser.parse_args()
 
+    # train_ratio を dir 数に合わせて展開
+    n_dirs = len(args.midi_dir)
+    if len(args.train_ratio) == 1:
+        train_ratios = args.train_ratio * n_dirs
+    elif len(args.train_ratio) == n_dirs:
+        train_ratios = args.train_ratio
+    else:
+        parser.error(
+            f"--train_ratio must have 1 value or the same number of values as --midi_dir "
+            f"({n_dirs}), got {len(args.train_ratio)}"
+        )
+
+    files_per_dir = None
     if not args.skip_preparation:
-        # データセットを準備
-        prepare_drum_dataset(
-            midi_dir=args.midi_dir,
+        files_per_dir = prepare_drum_dataset(
+            midi_dirs=args.midi_dir,
             output_dir=args.output_dir,
             vocab_path=args.vocab_path,
             file_extension=args.file_extension,
@@ -452,8 +511,10 @@ def main():
     # 訓練/検証セットに分割
     create_train_val_split(
         data_dir=args.output_dir,
-        train_ratio=args.train_ratio,
-        seed=args.seed
+        train_ratio=train_ratios[0],
+        seed=args.seed,
+        files_per_dir=files_per_dir,
+        train_ratios=train_ratios,
     )
 
     print("\nDataset preparation completed!")

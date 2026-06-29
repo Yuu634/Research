@@ -1,7 +1,7 @@
 echo "性能評価"
 
 checkpoints=(
-    "checkpoints_drum_standard-model1"
+    "checkpoints_drum_standard-lakh1"
 )
 
 # difficulty_mode: global_shift, upper_cap, full_assign
