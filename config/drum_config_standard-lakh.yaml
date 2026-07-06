@@ -118,7 +118,7 @@ training:
   free_bit_lambda: 0.1                    # Free bitラムダ値
 
   # チェックポイントとログ
-  ckpt_dir: 'trained_model/checkpoints_drum_standard-lakh5-kl6'      # チェックポイントディレクトリ
+  ckpt_dir: 'trained_model/checkpoints_drum_standard-lakh-kl6'      # チェックポイントディレクトリ
   ckpt_interval: 20000                      # チェックポイント保存間隔
   log_interval: 500                         # ログ記録間隔
   val_interval: 5000                        # 検証実行間隔

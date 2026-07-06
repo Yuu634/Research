@@ -14,12 +14,17 @@
 
   3. BPM 変更: 上記 1・2 の各バリアントにランダムな BPM オフセットを付与する。
 
+ノート編集（削除・追加・ピッチ置換）は pretty_midi.Note を介して行う。
+なお本モジュール内の pretty_midi.Note.start/end には実時間（秒）ではなく
+絶対 tick 値を格納する（リズム判定・グリッド生成を tick 空間で統一的に
+行うため）。ファイル書き出し時のみ mido の tick ベース表現に戻す。
+
 使用方法:
-    python data/augment_drum_midi_v2.py \
-        --input_dir  data/raw/test \
-        --output_dir data/filtered/test \
+    python data/augment_drum_midi.py \
+        --input_dir  data/test_dataset \
+        --output_dir data/test \
         --augment_hihat --augment_location \
-        --n_bpm_versions 3 --seed 42
+        --n_bpm_versions 1 --seed 42
 """
 
 import copy
@@ -31,6 +36,7 @@ import argparse
 from pathlib import Path
 from tqdm import tqdm
 import mido
+import pretty_midi
 
 _project_root = Path(__file__).resolve().parents[1]
 if str(_project_root) not in sys.path:
@@ -232,20 +238,61 @@ def detect_steady_rhythm(
     return None
 
 
-def make_grid_msgs(
+def _track_to_drum_notes(track: mido.MidiTrack, tpb: int) -> list[pretty_midi.Note]:
+    """ドラムトラックの note_on/note_off ペアを pretty_midi.Note のリストに変換する。
+
+    Note.start/end には絶対 tick 値をそのまま格納する（本モジュール内でのみ有効な規約）。
+    同一ピッチの note_on は先着順 (FIFO) で対応する note_off と対にする。
+    対応する note_off が見つからないハンギングノートは、消失させず
+    固定の短い長さ (make_grid_notes と同じ dur) で確定させる。
+    """
+    dur = max(1, tpb // 24)
+    notes: list[pretty_midi.Note] = []
+    pending: dict[int, list[tuple[int, int]]] = {}   # pitch -> [(start_tick, velocity), ...]
+
+    for t, msg in _msgs_to_abs(track):
+        if msg.is_meta or msg.channel != 9:
+            continue
+        if msg.type == 'note_on' and msg.velocity > 0:
+            pending.setdefault(msg.note, []).append((t, msg.velocity))
+        elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
+            stack = pending.get(msg.note)
+            if stack:
+                start_t, vel = stack.pop(0)
+                notes.append(pretty_midi.Note(velocity=vel, pitch=msg.note, start=start_t, end=t))
+
+    for pitch, remaining in pending.items():
+        for start_t, vel in remaining:
+            notes.append(pretty_midi.Note(velocity=vel, pitch=pitch, start=start_t, end=start_t + dur))
+
+    return notes
+
+
+def _drum_notes_to_msgs(notes: list[pretty_midi.Note]) -> list[tuple[int, mido.Message]]:
+    """pretty_midi.Note (start/end は絶対 tick 値) のリストを (絶対tick, msg) ペアに変換する"""
+    msgs: list[tuple[int, mido.Message]] = []
+    for n in notes:
+        start_t, end_t = int(round(n.start)), int(round(n.end))
+        if end_t <= start_t:
+            end_t = start_t + 1
+        msgs.append((start_t, mido.Message('note_on',  channel=9, note=n.pitch, velocity=n.velocity, time=0)))
+        msgs.append((end_t,   mido.Message('note_off', channel=9, note=n.pitch, velocity=0,          time=0)))
+    return msgs
+
+
+def make_grid_notes(
     bar_start: int, grid: str, tpb: int, pitch: int, velocity: int
-) -> list[tuple[int, mido.Message]]:
-    """指定グリッドで 1 小節分の (abs_tick, Message) ペアを生成する (note_on + note_off)"""
+) -> list[pretty_midi.Note]:
+    """指定グリッドで 1 小節分の pretty_midi.Note を生成する (start/end は絶対 tick 値)"""
     tpbar = tpb * 4
     step  = {'quarter': tpb, 'eighth': tpb // 2, 'sixteenth': tpb // 4}[grid]
     dur   = max(1, tpb // 24)
-    msgs: list[tuple[int, mido.Message]] = []
+    notes: list[pretty_midi.Note] = []
     tick = bar_start
     while tick < bar_start + tpbar:
-        msgs.append((tick,       mido.Message('note_on',  channel=9, note=pitch, velocity=velocity, time=0)))
-        msgs.append((tick + dur, mido.Message('note_off', channel=9, note=pitch, velocity=0,        time=0)))
+        notes.append(pretty_midi.Note(velocity=velocity, pitch=pitch, start=tick, end=tick + dur))
         tick += step
-    return msgs
+    return notes
 
 
 def apply_random_bpm(midi_obj: mido.MidiFile, rng: random.Random) -> None:
@@ -356,22 +403,22 @@ def augment_hihat_freq_with_bpm(
                 if not is_drum_track(track):
                     continue
 
-                abs_msgs = _msgs_to_abs(track)
-                new_abs: list[tuple[int, mido.Message]] = []
+                # channel 9 の note_on/note_off 以外（メタ・他チャンネル）はそのまま保持
+                other_msgs = [
+                    (t, msg) for t, msg in _msgs_to_abs(track)
+                    if msg.is_meta or msg.type not in ('note_on', 'note_off') or msg.channel != 9
+                ]
 
-                for t, msg in abs_msgs:
-                    if not msg.is_meta and msg.type in ('note_on', 'note_off') and msg.channel == 9:
-                        bar_start = (t // tpbar) * tpbar
-                        # convert_bars の小節の HH のみ削除
-                        if msg.note in HH_FREQ_PITCHES and bar_start in convert_bars:
-                            continue
-                    new_abs.append((t, msg))
-
+                # ドラムノートを pretty_midi.Note 化し、convert_bars の HH のみ削除
+                kept_notes = [
+                    n for n in _track_to_drum_notes(track, tpb)
+                    if not (n.pitch in HH_FREQ_PITCHES and (int(n.start) // tpbar) * tpbar in convert_bars)
+                ]
                 # 変換対象小節に新規グリッドノートを追加
                 for bar_start, vel in convert_bars.items():
-                    new_abs.extend(make_grid_msgs(bar_start, target_grid, tpb, HH_FREQ_NEW_PITCH, vel))
+                    kept_notes.extend(make_grid_notes(bar_start, target_grid, tpb, HH_FREQ_NEW_PITCH, vel))
 
-                track[:] = _abs_to_delta(new_abs)
+                track[:] = _abs_to_delta(other_msgs + _drum_notes_to_msgs(kept_notes))
 
             apply_random_bpm(midi_c, rng)
             results.append((midi_c, f"hh_{target_grid}_bpm{bpm_idx}"))
@@ -433,27 +480,22 @@ def augment_location_with_bpm(
                 if not is_drum_track(track):
                     continue
 
-                abs_msgs = _msgs_to_abs(track)
-                new_abs: list[tuple[int, mido.Message]] = []
-                replaced: list[tuple[int, int]] = []   # (abs_tick, velocity)
+                # channel 9 の note_on/note_off 以外（メタ・他チャンネル）はそのまま保持
+                other_msgs = [
+                    (t, msg) for t, msg in _msgs_to_abs(track)
+                    if msg.is_meta or msg.type not in ('note_on', 'note_off') or msg.channel != 9
+                ]
 
-                for t, msg in abs_msgs:
-                    if not msg.is_meta and msg.type in ('note_on', 'note_off') and msg.channel == 9:
-                        bar_start = (t // tpbar) * tpbar
-                        replace_pitches = bar_replace_pitches.get(bar_start, set())
-                        if msg.note in replace_pitches:
-                            # qualifying グループの音符を削除し、note_on は後で置換追加
-                            if msg.type == 'note_on' and msg.velocity > 0:
-                                replaced.append((t, msg.velocity))
-                            continue
-                    new_abs.append((t, msg))
+                # qualifying グループの音符は pretty_midi.Note のピッチを直接置換
+                # （タイミング・ベロシティは維持し、長さのみ dur に統一する）
+                drum_notes = _track_to_drum_notes(track, tpb)
+                for note in drum_notes:
+                    bar_start = (int(note.start) // tpbar) * tpbar
+                    if note.pitch in bar_replace_pitches.get(bar_start, ()):
+                        note.pitch = canonical_pitch
+                        note.end = note.start + dur
 
-                # 同一タイミング・ベロシティで canonical ピッチのノートを追加
-                for t, vel in replaced:
-                    new_abs.append((t,       mido.Message('note_on',  channel=9, note=canonical_pitch, velocity=vel, time=0)))
-                    new_abs.append((t + dur, mido.Message('note_off', channel=9, note=canonical_pitch, velocity=0,   time=0)))
-
-                track[:] = _abs_to_delta(new_abs)
+                track[:] = _abs_to_delta(other_msgs + _drum_notes_to_msgs(drum_notes))
 
             apply_random_bpm(midi_c, rng)
             results.append((midi_c, f"loc_{canonical_name}_bpm{bpm_idx}"))

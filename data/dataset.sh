@@ -1,16 +1,39 @@
 #!/bin/bash
 
 # 作成するデータセット指定
-create_target=(groove_augment) #(groove groove_full groove_augment lakh slakh2100 gigamidi)
+#(groove groove_full groove_augment lakh lakh_augment slakh2100 gigamidi)
+create_target=(
+    groove_augment
+)
 
-if [[ " ${create_target[*]} " == *"lakh"* ]]; then
+
+# create_target に指定した文字列と完全一致する要素があるかを判定する
+has_target() {
+    local target="$1"
+    local t
+    for t in "${create_target[@]}"; do
+        [[ "$t" == "$target" ]] && return 0
+    done
+    return 1
+}
+
+if has_target "lakh"; then
     echo "Creating Lakh dataset..."
     python data/cleaning_lakhmidi.py \
       --lakhmidi_dir data/raw/lmd_full \
       --output_dir data/filtered/lakhmidi
 fi
 
-if [[ " ${create_target[*]} " == *"slakh2100"* ]]; then
+if has_target "lakh_augment"; then
+    echo "Creating Lakh Augment dataset..."
+    python data/augment_drum_midi.py \
+      --input_dir  data/filtered/lakhmidi \
+      --output_dir data/filtered/lakh_augment \
+      --augment_hihat --augment_location \
+      --n_bpm_versions 1 --seed 42
+fi
+
+if has_target "slakh2100"; then
     echo "Creating Slakh2100 dataset..."
     # LakhMIDIDatasetダウンロード
     if [ ! -f data/lmd_full.tar.gz ]; then
@@ -33,7 +56,7 @@ if [[ " ${create_target[*]} " == *"slakh2100"* ]]; then
     fi
 fi
 
-if [[ " ${create_target[*]} " == *"gigamidi"* ]]; then
+if has_target "gigamidi"; then
     echo "Creating GigaMIDI dataset..."
     # GigaMIDIダウンロード
     if [ ! -d data/raw/gigamidi ]; then
@@ -47,7 +70,7 @@ if [[ " ${create_target[*]} " == *"gigamidi"* ]]; then
     fi
 fi
 
-if [[ " ${create_target[*]} " == *"groove_augment"* ]]; then
+if has_target "groove_augment"; then
     echo "Creating Groove Augment dataset..."
     # Groove MIDI Datasetをダウンロードしておく
     if [ ! -d data/filtered/groove_augment ]; then
@@ -59,12 +82,12 @@ if [[ " ${create_target[*]} " == *"groove_augment"* ]]; then
         python data/augment_drum_midi.py \
         --input_dir data/filtered/groove_cleaning \
         --output_dir data/filtered/groove_augment \
-        --augment_hihat \
-        --augment_location
+        --augment_hihat --augment_location \
+        --n_bpm_versions 1 --seed 42
     fi
 fi
 
-if [[ " ${create_target[*]} " == *"groove_full"* ]]; then
+if has_target "groove_full"; then
     echo "Creating Groove Full dataset..."
     # Groove MIDI Datasetをダウンロードし解凍しておく
     if [ ! -d data/filtered/groove_full ]; then
@@ -74,7 +97,7 @@ if [[ " ${create_target[*]} " == *"groove_full"* ]]; then
     fi
 fi
 
-if [[ " ${create_target[*]} " == *"groove"* ]]; then
+if has_target "groove"; then
     echo "Creating Groove MIDI dataset..."
     # Groove MIDI Datasetをダウンロードしておく
     if [ ! -d data/filtered/groove ]; then

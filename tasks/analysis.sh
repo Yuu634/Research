@@ -1,29 +1,31 @@
 
 checkpoints=(
-    "checkpoints_drum_standard-lakh1"
-    "checkpoints_drum_standard-lakh2"
-    "checkpoints_drum_standard-lakh3"
-    "checkpoints_drum_standard-lakh4"
+    "checkpoints_drum_standard-lakh1-kl14"
+    "checkpoints_drum_standard-lakh6-kl14"
+    "checkpoints_drum_standard-lakh7-kl14"
+    "checkpoints_drum_standard-lakh8-kl14"
+    "checkpoints_drum_standard-lakh9-kl14"
+    "checkpoints_drum_standard-lakh10-kl14"
 )
 
 # echo "Limb-bias分析結果"
-for checkpoint in "${checkpoints[@]}"; do
-    python -m scripts.analysis.inspect_alpha_limb \
-        --model_dir trained_model/${checkpoint} \
-        --output_dir output/alpha_limb/${checkpoint}
+# for checkpoint in "${checkpoints[@]}"; do
+#     python -m scripts.analysis.inspect_alpha_limb \
+#         --model_dir trained_model/${checkpoint} \
+#         --output_dir output/alpha_limb/${checkpoint}
 #     python -m scripts.analysis.inspect_position_bias \
 #         --model_dir trained_model/${checkpoint} \
 #         --output_dir output/position_bias/${checkpoint}
-done
+# done
 
 echo "AttentionMap分析結果"
 # Validデータをforwardに通しAttentionMapを可視化
-for checkpoint in "${checkpoints[@]}"; do
-    python -m scripts.analysis.visualize_attention_maps \
-        --model_dir trained_model/${checkpoint} \
-        --output_dir output/attention_maps/${checkpoint} \
-        --sample_idx 5
-done
+# for checkpoint in "${checkpoints[@]}"; do
+#     python -m scripts.analysis.visualize_attention_maps \
+#         --model_dir trained_model/${checkpoint} \
+#         --output_dir output/attention_maps/${checkpoint} \
+#         --sample_idx 5
+# done
 
 echo "Bias比率分析結果"
 for checkpoint in "${checkpoints[@]}"; do

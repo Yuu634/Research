@@ -29,6 +29,7 @@ import argparse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import miditoolkit
 import numpy as np
 import torch
 import yaml
@@ -72,6 +73,17 @@ from scripts.evaluate.metrics.groove_similarity import (
 )
 from scripts.evaluate.metrics.token_iou import token_iou
 from scripts.evaluate.metrics.spearman import compute_spearman_metrics
+
+
+def _get_midi_initial_bpm(midi_path: Path, default: int = 120) -> int:
+    """入力MIDIの最初のテンポ変化点からBPMを取得する。取得失敗時は default を返す。"""
+    try:
+        midi_obj = miditoolkit.MidiFile(str(midi_path))
+        if midi_obj.tempo_changes:
+            return int(round(midi_obj.tempo_changes[0].tempo))
+    except Exception:
+        pass
+    return default
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +280,31 @@ def _build_model(
 
 
 # ---------------------------------------------------------------------------
+# 生成MIDIのBPMを入力譜面と一致させるためのprimer構築
+# ---------------------------------------------------------------------------
+
+def _resolve_primer_tokens(tokenizer, tokenization_method: str, bpm: float) -> Optional[List[str]]:
+    """
+    生成MIDIのテンポが入力譜面と一致するよう、decoderの先頭トークンを
+    入力の実テンポに量子化したTEMPOトークン＋<BAR>で固定する。
+    tokens_to_midi は生成トークン列中で最初に見つかったTEMPOトークンを
+    最優先で採用するため、これにより --bpm 引数への依存なしに確実に
+    入力と同じBPMで書き出せる。
+    TEMPO/BARの並び順・量子化刻みはトークン化方式ごとに異なるため個別に組み立てる。
+    """
+    if tokenization_method == 'standard':
+        tempo_token = f'<TEMPO_{tokenizer._quantize_tempo(bpm)}>'
+        if tempo_token in tokenizer.token2idx:
+            return [tempo_token, '<BAR>']
+    elif tokenization_method == 'remi':
+        tempo_q = max(30, min(240, int(round(bpm))))
+        tempo_token = f'<TEMPO_{tempo_q}>'
+        if tempo_token in tokenizer.token2idx:
+            return ['<BAR>', tempo_token]
+    return None
+
+
+# ---------------------------------------------------------------------------
 # 1サンプル生成
 # ---------------------------------------------------------------------------
 
@@ -342,6 +379,7 @@ def _generate_one(
                 tokenizer, device=device,
                 max_input_len=max_dec_len, truncate_len=truncate_len,
                 nucleus_p=nucleus_p, temperature=temperature,
+                primer=_resolve_primer_tokens(tokenizer, tokenization_method, bpm),
             )
             gen_tokens = [tokenizer.idx2token[idx] for idx in gen_indices]
             chunks = split_tokens_into_bar_chunks(gen_tokens)
@@ -370,6 +408,7 @@ def _generate_one(
                 s_foot_cls=win_diff['s_foot_cls'],
                 s_move_cls=win_diff['s_move_cls'],
                 use_hierarchical_pe=bool(runtime_opts_cp and runtime_opts_cp['use_hierarchical_pe']),
+                primer_tempo_bpm=bpm,
             )
             chunks = split_cp_data_into_bar_chunks(cp_gen, tokenizer.idx2type_token)
 
@@ -418,6 +457,7 @@ def phase1_generate(
     done = 0
 
     for midi_path in midi_files:
+        bpm = _get_midi_initial_bpm(midi_path, default=args.bpm) if args.use_input_bpm else args.bpm
         for label_idx, label in enumerate(difficulty_labels):
             out_name = f'{midi_path.stem}_label{label_idx:03d}.mid'
             out_path = gen_dir / out_name
@@ -427,23 +467,24 @@ def phase1_generate(
             try:
                 gen_data, data_type, specified_diff = _generate_one(
                     model, tokenizer, tokenize_fn, tokenization_method,
-                    midi_path, label, config, device, args.bpm,
+                    midi_path, label, config, device, bpm,
                     args.nucleus_p, args.temperature,
                     runtime_opts_cp=runtime_opts_cp,
                     difficulty_bounds=difficulty_bounds,
                 )
                 if data_type == 'tokens':
-                    tokens_to_midi(gen_data, str(out_path), bpm=args.bpm)
+                    tokens_to_midi(gen_data, str(out_path), bpm=bpm)
                 else:
                     cp_data_to_midi(
                         gen_data, tokenizer.idx2type_token, tokenizer.idx2limb_token,
-                        str(out_path), bpm=args.bpm,
+                        str(out_path), bpm=bpm,
                     )
                 manifest.append({
                     'input_midi': str(midi_path),
                     'generated_midi': str(out_path),
                     'specified_difficulty': specified_diff,
                     'label_idx': label_idx,
+                    'bpm': bpm,
                 })
                 print(f'  → {out_path}')
             except Exception as e:
@@ -460,11 +501,19 @@ def phase1_generate(
 # フェーズ2：評価
 # ---------------------------------------------------------------------------
 
+def _is_reconstruction_label(label: Dict[str, Any]) -> bool:
+    """difficulty_mode が global_shift かつ全キーが 0 の場合を再構成タスクとみなす。"""
+    if label.get('difficulty_mode', 'full_assign') != 'global_shift':
+        return False
+    return all(int(label[k]) == 0 for k in DIFFICULTY_KEYS)
+
+
 def phase2_evaluate(
     manifest: List[Dict],
     args,
     difficulty_bounds: dict,
     output_dir: Path,
+    difficulty_labels: List[Dict[str, Any]],
 ) -> Dict:
     std_tokenizer = DrumTokenizer()
     sample_results: List[Dict] = []
@@ -483,28 +532,45 @@ def phase2_evaluate(
         gs = groove_similarity(ref_tokens, gen_tokens, args.alpha, args.beta)
         iou = token_iou(ref_tokens, gen_tokens)
 
+        label = difficulty_labels[entry['label_idx']]
+        task_type = 'reconstruction' if _is_reconstruction_label(label) else 'arrangement'
+
         sample_results.append({
             'input_midi': entry['input_midi'],
             'generated_midi': entry['generated_midi'],
             'specified_difficulty': entry['specified_difficulty'],
             'label_idx': entry['label_idx'],
+            'task_type': task_type,
             'hihat_similarity': hs,
             'rhythm_similarity': rs,
             'groove_similarity': gs,
             'token_iou': iou,
         })
 
-    def _mean(key):
-        return float(np.mean([s[key] for s in sample_results])) if sample_results else float('nan')
+    def _mean(samples, key):
+        return float(np.mean([s[key] for s in samples])) if samples else float('nan')
+
+    def _task_stats(samples):
+        return {
+            'n_samples': len(samples),
+            'mean_hihat_similarity': _mean(samples, 'hihat_similarity'),
+            'mean_rhythm_similarity': _mean(samples, 'rhythm_similarity'),
+            'mean_groove_similarity': _mean(samples, 'groove_similarity'),
+        }
+
+    recon_samples = [s for s in sample_results if s['task_type'] == 'reconstruction']
+    arrange_samples = [s for s in sample_results if s['task_type'] == 'arrangement']
 
     results: Dict = {
         'n_samples': len(sample_results),
         'alpha': args.alpha,
         'beta': args.beta,
-        'mean_hihat_similarity': _mean('hihat_similarity'),
-        'mean_rhythm_similarity': _mean('rhythm_similarity'),
-        'mean_groove_similarity': _mean('groove_similarity'),
-        'mean_token_iou': _mean('token_iou'),
+        'mean_hihat_similarity': _mean(sample_results, 'hihat_similarity'),
+        'mean_rhythm_similarity': _mean(sample_results, 'rhythm_similarity'),
+        'mean_groove_similarity': _mean(sample_results, 'groove_similarity'),
+        'mean_token_iou': _mean(sample_results, 'token_iou'),
+        'reconstruction': _task_stats(recon_samples),
+        'arrangement': _task_stats(arrange_samples),
     }
 
     print('Spearman 相関を計算中...')
@@ -536,6 +602,8 @@ def main():
     parser.add_argument('--beta', type=float, default=0.3,
                         help='Groove Similarity における Hihat Similarity の重み (default: 0.3)')
     parser.add_argument('--bpm', type=int, default=120)
+    parser.add_argument('--use_input_bpm', action='store_true',
+                        help='各入力MIDIファイルの初期テンポをBPMとして使用する（未指定時は --bpm の値を使用）')
     parser.add_argument('--nucleus_p', type=float, default=0.9)
     parser.add_argument('--temperature', type=float, default=1.2)
     parser.add_argument('--no_limb_bias_encoder', action='store_true',
@@ -624,7 +692,7 @@ def main():
     )
 
     # フェーズ2: 評価
-    results = phase2_evaluate(manifest, args, difficulty_bounds, output_dir)
+    results = phase2_evaluate(manifest, args, difficulty_bounds, output_dir, difficulty_labels)
 
     print('\n' + '=' * 60)
     print('評価完了')
@@ -634,6 +702,12 @@ def main():
     print(f'  Groove Similarity:    {results["mean_groove_similarity"]:.4f}  '
           f'(α={args.alpha}, β={args.beta})')
     print(f'  Token IoU:            {results["mean_token_iou"]:.4f}')
+    for task_type in ('reconstruction', 'arrangement'):
+        stats = results[task_type]
+        print(f'  [{task_type}] n={stats["n_samples"]}  '
+              f'hihat={stats["mean_hihat_similarity"]:.4f}  '
+              f'rhythm={stats["mean_rhythm_similarity"]:.4f}  '
+              f'groove={stats["mean_groove_similarity"]:.4f}')
     print(f'  Results:              {output_dir / "results.json"}')
     print('=' * 60)
 

@@ -195,6 +195,7 @@ def generate_cp_sequence(
     s_foot_cls=None,
     s_move_cls=None,
     use_hierarchical_pe=False,
+    primer_tempo_bpm=None,
 ):
     target_bars = latents.size(0)
     note_type_idx = struct_token2idx.get('<NOTE>', struct_token2idx['<PAD>'])
@@ -229,9 +230,16 @@ def generate_cp_sequence(
     else:
         s_tech_ph = s_indep_ph = s_hand_ph = s_foot_ph = s_move_ph = None
 
-    # primer: <TEMPO_120>, <BAR>
+    # primer: <TEMPO_X>, <BAR>
+    # 入力譜面と同じBPMで生成MIDIを書き出せるよう、primer_tempo_bpm 指定時は
+    # 入力の実テンポを5BPM刻みに量子化したトークンを使う（未指定時は従来通り120固定）。
     generated = []
-    primer_struct = '<TEMPO_120>' if '<TEMPO_120>' in struct_token2idx else '<BAR>'
+    if primer_tempo_bpm is not None:
+        quantized_tempo = max(60, min(240, int(np.ceil(float(primer_tempo_bpm) / 5.0)) * 5))
+        tempo_token = f'<TEMPO_{quantized_tempo}>'
+    else:
+        tempo_token = '<TEMPO_120>'
+    primer_struct = tempo_token if tempo_token in struct_token2idx else '<BAR>'
     for tok in [primer_struct, '<BAR>']:
         generated.append((0, struct_token2idx[tok], pos_pad_value, limb_pad_idx, limb_pad_idx, limb_pad_idx, limb_pad_idx))
 

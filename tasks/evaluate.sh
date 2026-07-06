@@ -1,22 +1,21 @@
 echo "性能評価"
 
 checkpoints=(
-    "checkpoints_drum_standard-lakh1-kl5"
-    "checkpoints_drum_standard-lakh1-kl6"
-    "checkpoints_drum_standard-lakh2-kl6"
-    "checkpoints_drum_standard-lakh3-kl6"
-    "checkpoints_drum_standard-lakh4-kl6"
-    "checkpoints_drum_standard-lakh5-kl6"
+    "checkpoints_drum_standard-lakhaug1-kl12"
+    "checkpoints_drum_standard-lakhaug1-kl13"
+    "checkpoints_drum_standard-lakhaug1-kl14"
+    "checkpoints_drum_standard-lakhaug1-kl15"
+    "checkpoints_drum_standard-lakhaug1-kl16"
 )
 
-model_kind="lakh"
+model_kind="-lakhaug" # "" or "-lakh" or "-lakhaug" 
 
 # difficulty_mode: global_shift, upper_cap, full_assign
 for checkpoint in "${checkpoints[@]}"; do
     python -m scripts.evaluate.evaluate \
         --input_midi_dir data/test_dataset \
         --model_path trained_model/${checkpoint}/params/best_params.pt \
-        --difficulty_bounds data/metadata_new/difficulty_bounds_standard-${model_kind}.pkl \
+        --difficulty_bounds data/metadata_new/difficulty_bounds_standard${model_kind}.pkl \
         --difficulty_labels_file <(echo '[
             {"difficulty_mode": "global_shift", "s_tech_cls": 2, "s_indep_cls": 2, "s_hand_cls": 2, "s_foot_cls": 2, "s_move_cls": 2},
             {"difficulty_mode": "global_shift", "s_tech_cls": 1, "s_indep_cls": 1, "s_hand_cls": 1, "s_foot_cls": 1, "s_move_cls": 1},
@@ -27,7 +26,8 @@ for checkpoint in "${checkpoints[@]}"; do
             {"difficulty_mode": "upper_cap", "s_tech_cls": 4, "s_indep_cls": 4, "s_hand_cls": 4, "s_foot_cls": 4, "s_move_cls": 4},
             {"difficulty_mode": "upper_cap", "s_tech_cls": 6, "s_indep_cls": 6, "s_hand_cls": 6, "s_foot_cls": 6, "s_move_cls": 6}
             ]') \
-        --output_dir output/eval-new/${checkpoint}
+        --output_dir output/eval-bpm2/${checkpoint} \
+        --use_input_bpm
         #--no_limb_bias_decoder \
         # --no_limb_bias_encoder \
         # --no_position_bias_encoder \

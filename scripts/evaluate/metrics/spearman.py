@@ -65,8 +65,9 @@ def compute_spearman_metrics(
         for k in DIFFICULTY_KEYS:
             specified[k].append(entry['specified_difficulty'][k])
 
+        entry_bpm = entry.get('bpm', bpm)
         gen_diff = _compute_difficulty_from_midi(
-            entry['generated_midi'], difficulty_bounds, bpm
+            entry['generated_midi'], difficulty_bounds, entry_bpm
         )
         for k in DIFFICULTY_KEYS:
             measured[k].append(gen_diff[k])

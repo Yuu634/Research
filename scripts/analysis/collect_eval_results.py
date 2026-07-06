@@ -5,18 +5,24 @@ and save as a spreadsheet-compatible CSV file.
 
 Usage:
     python scripts/analysis/collect_eval_results.py \
-        --checkpoints checkpoints_drum_standard-lakh1-kl6 checkpoints_drum_standard-lakh2-kl6 checkpoints_drum_standard-lakh3-kl6 checkpoints_drum_standard-lakh4-kl6 checkpoints_drum_standard-lakh5-kl6 \
+        --eval-dir output/eval-bpm2 \
+        --checkpoints checkpoints_drum_standard-lakh1-kl checkpoints_drum_standard-lakh1-kl2 checkpoints_drum_standard-lakh1-kl3 checkpoints_drum_standard-lakh1-kl4 checkpoints_drum_standard-lakh1-kl5 checkpoints_drum_standard-lakh1-kl6 checkpoints_drum_standard-lakh1-kl7 checkpoints_drum_standard-lakh1-kl8 checkpoints_drum_standard-lakh1-kl9 checkpoints_drum_standard-lakh1-kl10 checkpoints_drum_standard-lakh1-kl11 checkpoints_drum_standard-lakh1-kl12 checkpoints_drum_standard-lakh1-kl13 checkpoints_drum_standard-lakh1-kl14 checkpoints_drum_standard-lakh1-kl15 checkpoints_drum_standard-lakh1-kl16 checkpoints_drum_standard-model1-4 checkpoints_drum_standard-model1-5 \
         --metrics hihat_similarity rhythm_similarity token_iou Spearman_control \
-        --output results_table.csv
+        --output output/eval-bpm2/results_table.csv
 
 Supported metric names:
-    hihat_similarity     -> mean_hihat_similarity
-    rhythm_similarity    -> mean_rhythm_similarity
-    groove_similarity    -> mean_groove_similarity
+    hihat_similarity     -> expands to hihat_similarity_reconstruction / hihat_similarity_arrangement
+    rhythm_similarity    -> expands to rhythm_similarity_reconstruction / rhythm_similarity_arrangement
+    groove_similarity    -> expands to groove_similarity_reconstruction / groove_similarity_arrangement
     token_iou            -> mean_token_iou
     Spearman_control     -> expands to all 5 spearman_control_* correlations as separate columns
     <spearman key>       -> correlation value of that key in spearman dict
     <top-level key>      -> direct value from results.json
+
+    <metric>_reconstruction / <metric>_arrangement
+        -> looks up <metric> (hihat_similarity, rhythm_similarity, groove_similarity, n_samples, ...)
+           inside results["reconstruction"] / results["arrangement"] instead of the top level.
+           e.g. hihat_similarity_reconstruction, groove_similarity_arrangement
 """
 
 import argparse
@@ -24,7 +30,7 @@ import csv
 import json
 from pathlib import Path
 
-EVAL_DIR = Path(__file__).parent.parent.parent / "output" / "eval-new"
+EVAL_DIR = Path(__file__).parent.parent.parent / "output" / "eval-bpm2"
 
 METRIC_ALIASES = {
     "hihat_similarity": "mean_hihat_similarity",
@@ -41,29 +47,50 @@ SPEARMAN_CONTROL_KEYS = [
     "spearman_control_s_move_cls",
 ]
 
+TASK_TYPES = ("reconstruction", "arrangement")
+
+TASK_SPLIT_METRICS = ("hihat_similarity", "rhythm_similarity", "groove_similarity")
+
 
 def expand_metrics(metrics):
-    """Expand Spearman_control into individual spearman_control_* columns."""
+    """Expand Spearman_control into individual spearman_control_* columns, and
+    expand task-splittable similarity metrics into reconstruction/arrangement columns."""
     expanded = []
     for m in metrics:
         if m.lower() == "spearman_control":
             expanded.extend(SPEARMAN_CONTROL_KEYS)
+        elif m in TASK_SPLIT_METRICS:
+            expanded.extend(f"{m}_{task}" for task in TASK_TYPES)
         else:
             expanded.append(m)
     return expanded
 
 
-def extract_metric(data, metric_name):
-    if metric_name in data:
-        return data[metric_name]
+def _extract_from_scope(scope, metric_name):
+    if metric_name in scope:
+        return scope[metric_name]
 
     alias = METRIC_ALIASES.get(metric_name)
-    if alias and alias in data:
-        return data[alias]
+    if alias and alias in scope:
+        return scope[alias]
 
     mean_key = f"mean_{metric_name}"
-    if mean_key in data:
-        return data[mean_key]
+    if mean_key in scope:
+        return scope[mean_key]
+
+    return None
+
+
+def extract_metric(data, metric_name):
+    for task in TASK_TYPES:
+        suffix = f"_{task}"
+        if metric_name.endswith(suffix):
+            task_scope = data.get(task, {})
+            return _extract_from_scope(task_scope, metric_name[: -len(suffix)])
+
+    value = _extract_from_scope(data, metric_name)
+    if value is not None:
+        return value
 
     spearman = data.get("spearman", {})
     if metric_name in spearman:
@@ -86,7 +113,7 @@ def main():
     parser.add_argument(
         "--metrics", "-m",
         nargs="+",
-        default=["hihat_similarity", "rhythm_similarity", "token_iou", "Spearman_control"],
+        default=["hihat_similarity", "rhythm_similarity", "groove_similarity", "token_iou", "Spearman_control"],
         help="Metric column names to extract.",
     )
     parser.add_argument(

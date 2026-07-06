@@ -433,13 +433,13 @@ def _plot_component(rows: List[dict], component: str, output_dir: str) -> None:
 
     fig, axes = plt.subplots(2, 1, figsize=(max(8, len(layers) * 1.2), 9))
 
-    # ── 上パネル: mean |QK| と α の絶対値比較 ──────────────────────────
+    # ── Top panel: compare mean |QK| against α ──────────────────────────
     ax = axes[0]
     w = 0.28
-    bars_same  = ax.bar(x - w, qk_same,  w, label='mean |QK| (同一四肢)',  color='steelblue')
-    bars_other = ax.bar(x,     qk_other, w, label='mean |QK| (非同一・メタ含)', color='cornflowerblue', alpha=0.7)
+    bars_same  = ax.bar(x - w, qk_same,  w, label='mean |QK| (same-limb)',  color='steelblue')
+    bars_other = ax.bar(x,     qk_other, w, label='mean |QK| (other, incl. meta)', color='cornflowerblue', alpha=0.7)
 
-    # 四分位範囲を誤差バーで表示
+    # Show interquartile range as error bars
     yerr_low  = [max(0.0, m - p25) for m, p25 in zip(qk_same, qk_same_p25)]
     yerr_high = [max(0.0, p75 - m) for m, p75 in zip(qk_same, qk_same_p75)]
     ax.errorbar(x - w, qk_same, yerr=[yerr_low, yerr_high],
@@ -447,39 +447,39 @@ def _plot_component(rows: List[dict], component: str, output_dir: str) -> None:
 
     if has_alpha:
         ax.plot(x + w * 0.5, alphas, 'r^--', markersize=9, linewidth=2.0,
-                label='α (limb bias 寄与量)')
+                label='α (limb bias contribution)')
 
     ax.set_xticks(x)
     ax.set_xticklabels([f'L{l}' for l in layers])
-    ax.set_ylabel('Attention logit の絶対値', fontsize=11)
+    ax.set_ylabel('Absolute attention logit', fontsize=11)
     ax.set_title(
         f'{component}: mean |QK^T/√d_k| vs α (limb bias)\n'
-        '誤差バー = IQR (P25–P75) of same-limb pairs',
+        'Error bars = IQR (P25-P75) of same-limb pairs',
         fontsize=12,
     )
     ax.legend(fontsize=9, loc='upper right')
     ax.grid(axis='y', alpha=0.3)
 
-    # ── 下パネル: 比率 α / mean|QK|_same ──────────────────────────────
+    # ── Bottom panel: ratio α / mean|QK|_same ──────────────────────────
     ax2 = axes[1]
     if has_alpha:
         valid_ratio = [r if not np.isnan(r) else 0.0 for r in ratio_same]
         colors = ['tomato' if r >= 1.0 else 'steelblue' for r in valid_ratio]
         ax2.bar(x, valid_ratio, color=colors,
-                label='α / mean|QK| (同一四肢)')
+                label='α / mean|QK| (same-limb)')
         ax2.axhline(1.0, color='black', linestyle='--', linewidth=1.5,
-                    label='ratio = 1 (α と QK が等大)')
-        ax2.set_ylabel('比率  α / mean|QK|_same', fontsize=11)
+                    label='ratio = 1 (α and QK equal magnitude)')
+        ax2.set_ylabel('Ratio  α / mean|QK|_same', fontsize=11)
         ax2.set_title(
-            f'{component}: Limb-bias α が同一四肢ペアの QK 内積に対して占める相対強度\n'
-            '赤バー (ratio ≥ 1) → バイアスが QK 内積以上',
+            f'{component}: relative strength of limb-bias α vs QK dot product on same-limb pairs\n'
+            'Red bars (ratio >= 1) -> bias dominates the QK dot product',
             fontsize=12,
         )
         ax2.legend(fontsize=9)
     else:
-        ax2.text(0.5, 0.5, 'Limb bias 無効 (α なし)',
+        ax2.text(0.5, 0.5, 'Limb bias disabled (no α)',
                  ha='center', va='center', transform=ax2.transAxes, fontsize=14)
-        ax2.set_title(f'{component}: α が存在しないため比率グラフなし', fontsize=12)
+        ax2.set_title(f'{component}: no ratio plot (α unavailable)', fontsize=12)
 
     ax2.set_xticks(x)
     ax2.set_xticklabels([f'L{l}' for l in layers])

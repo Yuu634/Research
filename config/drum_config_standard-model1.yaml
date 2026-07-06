@@ -28,7 +28,7 @@ model:
   dec_d_ff: 2048                          # デコーダーのフィードフォワード次元
 
   # 潜在空間と埋め込み
-  d_latent: 256                           # 潜在空間の次元
+  d_latent: 512                           # 潜在空間の次元
   d_embed: 512                            # トークン埋め込みの次元
 
   # 属性埋め込み（ドラム譜では使用しない）
@@ -112,13 +112,13 @@ training:
 
   # KLダイバージェンス
   constant_kl: false                      # 定数KLベータを使用するか
-  kl_max_beta: 0.2                        # KLベータの最大値
+  kl_max_beta: 1.0                        # KLベータの最大値
   no_kl_steps: 1000                       # KLを無効にするステップ数
   kl_cycle_steps: 10000                   # KL周期的スケジューリングの周期
-  free_bit_lambda: 0.0                    # Free bitラムダ値
+  free_bit_lambda: 0.1                    # Free bitラムダ値
 
   # チェックポイントとログ
-  ckpt_dir: 'trained_model/checkpoints_drum_standard-model1-2'      # チェックポイントディレクトリ
+  ckpt_dir: 'trained_model/checkpoints_drum_standard-model1-5'      # チェックポイントディレクトリ
   ckpt_interval: 5000                      # チェックポイント保存間隔
   log_interval: 100                        # ログ記録間隔
   val_interval: 2000                       # 検証実行間隔

@@ -2,11 +2,11 @@
 
 # データ設定
 data:
-  data_dir: 'data/processed_new/drum_dataset_standard_with_difficulty'              # トークン化されたドラムデータのディレクトリ
-  vocab_path: 'data/metadata_new/drum_vocab_standard.pkl'          # 語彙ファイルのパス
+  data_dir: 'data/processed_new/drum_dataset_standard-lakhaug_with_difficulty'              # トークン化されたドラムデータのディレクトリ
+  vocab_path: 'data/metadata_new/drum_vocab_standard-lakhaug.pkl'          # 語彙ファイルのパス
   tokenization_method: 'standard'         # 'standard' or 'cp_limb_v1'
-  train_split: 'data/processed_new/drum_dataset_standard_with_difficulty/train_split.pkl'  # 訓練データ分割
-  val_split: 'data/processed_new/drum_dataset_standard_with_difficulty/val_split.pkl'      # 検証データ分割
+  train_split: 'data/processed_new/drum_dataset_standard-lakhaug_with_difficulty/train_split.pkl'  # 訓練データ分割
+  val_split: 'data/processed_new/drum_dataset_standard-lakhaug_with_difficulty/val_split.pkl'      # 検証データ分割
   enc_seqlen: 128                         # エンコーダー最大系列長
   dec_seqlen: 1280                        # デコーダー最大系列長
   max_bars: 16                            # 最大小節数
@@ -55,13 +55,13 @@ model:
   bar_anchor_mode: 'bar_token'            # 小節潜在アンカー（'first_token' or 'bar_token'）
 
   # Limb-Relation Bias（四肢相関バイアス）
-  use_limb_bias_encoder: false    # EncoderにLimb-Relation Biasを適用するか
-  use_limb_bias_decoder: false    # DecoderにLimb-Relation Biasを適用するか
-  limb_bias_alpha: null          # Limb-Relation Biasのスケーリング係数（nullの場合は自動計算）
+  use_limb_bias_encoder: false        # EncoderにLimb-Relation Biasを適用するか
+  use_limb_bias_decoder: false        # DecoderにLimb-Relation Biasを適用するか
+  limb_bias_alpha: 1.0              # Limb-Relation Biasのスケーリング係数（nullの場合は自動計算）
 
   # Position-Same-Time Bias（同一演奏位置バイアス）
   # 同じ Bar+Beat+Pos にあるノートトークン同士の Attention にバイアスを加算する
-  use_position_bias_encoder: true   # Encoder に適用するか
+  use_position_bias_encoder: false   # Encoder に適用するか
   use_position_bias_decoder: false   # Decoder に適用するか
   # position_bias_mode:
   #   'uniform'    - 全ペアに同一スカラー α
@@ -112,16 +112,16 @@ training:
 
   # KLダイバージェンス
   constant_kl: false                      # 定数KLベータを使用するか
-  kl_max_beta: 0.2                        # KLベータの最大値
+  kl_max_beta: 1.0                        # KLベータの最大値
   no_kl_steps: 1000                       # KLを無効にするステップ数
   kl_cycle_steps: 10000                   # KL周期的スケジューリングの周期
   free_bit_lambda: 0.0                    # Free bitラムダ値
 
   # チェックポイントとログ
-  ckpt_dir: 'trained_model/checkpoints_drum_standard-model9-inattn'      # チェックポイントディレクトリ
-  ckpt_interval: 5000                    # チェックポイント保存間隔
-  log_interval: 100                      # ログ記録間隔
-  val_interval: 2000                     # 検証実行間隔
+  ckpt_dir: 'trained_model/checkpoints_drum_standard-lakhaug1-kl12'      # チェックポイントディレクトリ
+  ckpt_interval: 20000                      # チェックポイント保存間隔
+  log_interval: 1000                        # ログ記録間隔
+  val_interval: 20000                       # 検証実行間隔
   val_n_rounds: 1                           # 検証時のラウンド数
 
   # Early Stopping
