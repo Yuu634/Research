@@ -498,6 +498,169 @@ def phase1_generate(
 
 
 # ---------------------------------------------------------------------------
+# 1サンプル生成（アンサンブルデコーディング版）
+# ---------------------------------------------------------------------------
+
+def _generate_one_ensemble(
+    members: List[Dict[str, Any]],
+    tokenizer,
+    tokenize_fn,
+    tokenization_method: str,
+    midi_path: Path,
+    target_label: Dict[str, Any],
+    config: dict,
+    device: str,
+    bpm: int,
+    nucleus_p: float,
+    temperature: float,
+    difficulty_bounds: Optional[dict] = None,
+) -> Tuple[Any, str, Dict[str, float]]:
+    """_generate_one() のアンサンブル版。tokenization_method は standard/remi のみ
+    （cp_limb_v1メンバーはmain()で事前に弾いているためここには到達しない）。
+    window plan構築・難易度モード解決・primer解決・bar chunk分割/マージ等の制御フローは
+    _generate_one() と完全に同一で、生成呼び出し2箇所のみ
+    extract_bar_latents_ensemble / generate_with_difficulty_control_ensemble に
+    置き換えている。"""
+    from scripts.generate.generate_drum_ensemble import (
+        extract_bar_latents_ensemble,
+        generate_with_difficulty_control_ensemble,
+    )
+
+    mode_payload, mode_bar_positions = tokenize_fn(str(midi_path))
+    n_bars = len(mode_bar_positions)
+
+    generate_cfg = config.get('generate', {})
+    max_bars = int(generate_cfg.get('max_bars', n_bars))
+    enc_seqlen = int(config['data']['enc_seqlen'])
+    max_dec_len = int(generate_cfg.get('max_input_dec_seqlen', 1280))
+    truncate_len = min(512, max(64, max_dec_len - 32))
+
+    window_plan = build_window_plan(n_bars, max_bars, max_bars)
+
+    bounds = _resolve_difficulty_upper_bounds(config['model'])
+    diff_mode = target_label.get('difficulty_mode', 'full_assign')
+
+    if diff_mode in ('global_shift', 'upper_cap'):
+        std_tok = DrumTokenizer()
+        std_tokens, std_bar_pos = std_tok.midi_to_tokens(str(midi_path))
+        base = compute_difficulty_levels(std_tokens, std_bar_pos, difficulty_bounds, bpm)
+        base = {k: np.resize(base[k], n_bars) for k in DIFFICULTY_KEYS}
+        if diff_mode == 'global_shift':
+            target_per_bar = {
+                k: np.clip(base[k] + target_label[k], 0, bounds[k]).astype(np.int64)
+                for k in DIFFICULTY_KEYS
+            }
+        else:  # upper_cap
+            target_per_bar = {
+                k: np.clip(np.minimum(base[k], target_label[k]), 0, bounds[k]).astype(np.int64)
+                for k in DIFFICULTY_KEYS
+            }
+    else:  # full_assign
+        target_per_bar = {
+            k: np.clip(np.full(n_bars, target_label[k], dtype=np.int64), 0, bounds[k])
+            for k in DIFFICULTY_KEYS
+        }
+
+    window_results = []
+
+    for st_bar, ed_bar in window_plan:
+        win_diff = {k: target_per_bar[k][st_bar:ed_bar] for k in DIFFICULTY_KEYS}
+
+        win_tokens = _slice_tokens_by_bar_range(mode_payload, mode_bar_positions, st_bar, ed_bar)
+        local_bar_pos = [p - mode_bar_positions[st_bar] for p in mode_bar_positions[st_bar:ed_bar]]
+
+        latents_per_member = extract_bar_latents_ensemble(
+            members, win_tokens, local_bar_pos, enc_seqlen, device,
+            use_sampling=False, sampling_var=0.,
+        )
+        gen_indices, _, _ = generate_with_difficulty_control_ensemble(
+            [m['model'] for m in members], latents_per_member,
+            win_diff['s_tech_cls'], win_diff['s_indep_cls'],
+            win_diff['s_hand_cls'], win_diff['s_foot_cls'], win_diff['s_move_cls'],
+            tokenizer, device=device,
+            max_input_len=max_dec_len, truncate_len=truncate_len,
+            nucleus_p=nucleus_p, temperature=temperature,
+            primer=_resolve_primer_tokens(tokenizer, tokenization_method, bpm),
+        )
+        gen_tokens = [tokenizer.idx2token[idx] for idx in gen_indices]
+        chunks = split_tokens_into_bar_chunks(gen_tokens)
+
+        verify_bar_count(ed_bar - st_bar, len(chunks), context=f'bars [{st_bar},{ed_bar})')
+        window_results.append((st_bar, ed_bar, chunks))
+
+    specified_diff = {k: float(np.mean(target_per_bar[k])) for k in DIFFICULTY_KEYS}
+    merged = merge_window_token_chunks(n_bars, window_results)
+    return merged, 'tokens', specified_diff
+
+
+# ---------------------------------------------------------------------------
+# フェーズ1（アンサンブル版）：生成
+# ---------------------------------------------------------------------------
+
+def phase1_generate_ensemble(
+    args,
+    members: List[Dict[str, Any]],
+    tokenizer,
+    config: dict,
+    device: str,
+    difficulty_labels: List[Dict[str, Any]],
+    output_dir: Path,
+    difficulty_bounds: Optional[dict] = None,
+) -> List[Dict]:
+    """phase1_generate() のアンサンブル版。生成箇所のみ _generate_one_ensemble に差し替える。"""
+    tokenization_method = members[0]['tokenization_method']
+    tokenize_fn = lambda midi_path: tokenizer.midi_to_tokens(midi_path)  # noqa: E731
+
+    midi_files = sorted(
+        list(Path(args.input_midi_dir).glob('*.mid'))
+        + list(Path(args.input_midi_dir).glob('*.midi'))
+    )
+    if not midi_files:
+        print(f'[ERROR] MIDIファイルが見つかりません: {args.input_midi_dir}')
+        sys.exit(1)
+
+    gen_dir = output_dir / 'generated_midi'
+    gen_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest: List[Dict] = []
+    total = len(midi_files) * len(difficulty_labels)
+    done = 0
+
+    for midi_path in midi_files:
+        bpm = _get_midi_initial_bpm(midi_path, default=args.bpm) if args.use_input_bpm else args.bpm
+        for label_idx, label in enumerate(difficulty_labels):
+            out_name = f'{midi_path.stem}_label{label_idx:03d}.mid'
+            out_path = gen_dir / out_name
+            done += 1
+            print(f'[{done}/{total}] {midi_path.name}  label={label_idx} {label}  [ensemble]')
+
+            try:
+                gen_data, data_type, specified_diff = _generate_one_ensemble(
+                    members, tokenizer, tokenize_fn, tokenization_method,
+                    midi_path, label, config, device, bpm,
+                    args.nucleus_p, args.temperature,
+                    difficulty_bounds=difficulty_bounds,
+                )
+                tokens_to_midi(gen_data, str(out_path), bpm=bpm)
+                manifest.append({
+                    'input_midi': str(midi_path),
+                    'generated_midi': str(out_path),
+                    'specified_difficulty': specified_diff,
+                    'label_idx': label_idx,
+                    'bpm': bpm,
+                })
+                print(f'  → {out_path}')
+            except Exception as e:
+                print(f'  [WARNING] 生成失敗: {e}')
+
+    manifest_path = output_dir / 'manifest.json'
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    print(f'\nManifest → {manifest_path}  ({len(manifest)} 件)')
+    return manifest
+
+
+# ---------------------------------------------------------------------------
 # フェーズ2：評価
 # ---------------------------------------------------------------------------
 
@@ -592,7 +755,12 @@ def phase2_evaluate(
 def main():
     parser = argparse.ArgumentParser(description='Drum generation evaluation')
     parser.add_argument('--input_midi_dir', required=True, help='入力MIDIディレクトリ')
-    parser.add_argument('--model_path', required=True, help='モデルチェックポイントパス')
+    parser.add_argument('--model_path', nargs='+', required=True,
+                        help='モデルチェックポイントパス（1個=単一モデル、'
+                             '2個以上は--ensemble_decoding併用時のみ有効）')
+    parser.add_argument('--ensemble_decoding', action='store_true',
+                        help='2個以上の--model_path指定時、複数モデルの確率分布平均化による'
+                             'アンサンブルデコーディングを使用する')
     parser.add_argument('--difficulty_bounds', required=True, help='難易度境界値pklファイル')
     parser.add_argument('--difficulty_labels_file', required=True,
                         help='難易度ラベルリストJSONファイル')
@@ -616,6 +784,15 @@ def main():
                         help='use_position_bias_decoder を強制的に False にする')
     args = parser.parse_args()
 
+    if len(args.model_path) > 1 and not args.ensemble_decoding:
+        print(f'[ERROR] {len(args.model_path)}個の --model_path が指定されましたが '
+              f'--ensemble_decoding が指定されていません。複数チェックポイントを渡す場合は '
+              f'--ensemble_decoding を明示してください。')
+        sys.exit(1)
+    if len(args.model_path) == 1 and args.ensemble_decoding:
+        print('[ERROR] --ensemble_decoding には2個以上の --model_path が必要です。')
+        sys.exit(1)
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -626,70 +803,107 @@ def main():
     with open(args.difficulty_bounds, 'rb') as f:
         difficulty_bounds = pickle.load(f)
 
-    # config・vocab・モデルロード
-    model_path = Path(args.model_path)
-    config_path = model_path.parent.parent / 'config.yaml'
-    if not config_path.exists():
-        print(f'[ERROR] config.yaml が見つかりません: {config_path}')
-        sys.exit(1)
+    if not args.ensemble_decoding:
+        # config・vocab・モデルロード（単一モデル、既存ロジックのまま）
+        model_path = Path(args.model_path[0])
+        config_path = model_path.parent.parent / 'config.yaml'
+        if not config_path.exists():
+            print(f'[ERROR] config.yaml が見つかりません: {config_path}')
+            sys.exit(1)
 
-    config = yaml.load(open(config_path, 'r'), Loader=yaml.FullLoader)
-    tokenization_method = validate_tokenization_method(
-        config['data'].get('tokenization_method', 'standard')
-    )
-    device = config['training']['device']
-    print(f'tokenization_method={tokenization_method}  device={device}')
+        config = yaml.load(open(config_path, 'r'), Loader=yaml.FullLoader)
+        tokenization_method = validate_tokenization_method(
+            config['data'].get('tokenization_method', 'standard')
+        )
+        device = config['training']['device']
+        print(f'tokenization_method={tokenization_method}  device={device}')
 
-    with open(config['data']['vocab_path'], 'rb') as f:
-        vocab_data = pickle.load(f)
+        with open(config['data']['vocab_path'], 'rb') as f:
+            vocab_data = pickle.load(f)
 
-    adapter = resolve_mode_adapter(tokenization_method, vocab_data)
-    tokenizer = adapter['tokenizer']
-    tokenize_fn = adapter['tokenize_fn']
+        adapter = resolve_mode_adapter(tokenization_method, vocab_data)
+        tokenizer = adapter['tokenizer']
+        tokenize_fn = adapter['tokenize_fn']
 
-    mconf = config['model']
-    runtime_opts_cp = None
-    if tokenization_method == 'cp_limb_v1':
-        runtime_opts_cp = _resolve_runtime_model_options_cp(mconf, tokenizer)
+        mconf = config['model']
+        runtime_opts_cp = None
+        if tokenization_method == 'cp_limb_v1':
+            runtime_opts_cp = _resolve_runtime_model_options_cp(mconf, tokenizer)
 
-    checkpoint = torch.load(model_path, map_location=device)
-    ckpt_sd = checkpoint['state_dict'] if 'state_dict' in checkpoint else checkpoint
+        checkpoint = torch.load(model_path, map_location=device)
+        ckpt_sd = checkpoint['state_dict'] if 'state_dict' in checkpoint else checkpoint
 
-    # チェックポイントの実際のembedding形状からn_s_*_cls を上書き
-    # (学習時はdifficulty_num_classes = max_label+2 でbuildされるため configの値と異なる場合がある)
-    for attr in ('tech', 'indep', 'hand', 'foot', 'move'):
-        key = f's_{attr}_attr_emb.emb_lookup.weight'
-        if key in ckpt_sd:
-            mconf[f'n_s_{attr}_cls'] = int(ckpt_sd[key].size(0))
+        # チェックポイントの実際のembedding形状からn_s_*_cls を上書き
+        # (学習時はdifficulty_num_classes = max_label+2 でbuildされるため configの値と異なる場合がある)
+        for attr in ('tech', 'indep', 'hand', 'foot', 'move'):
+            key = f's_{attr}_attr_emb.emb_lookup.weight'
+            if key in ckpt_sd:
+                mconf[f'n_s_{attr}_cls'] = int(ckpt_sd[key].size(0))
 
-    # limb/position biasを強制的に無効化
-    if args.no_limb_bias_encoder:
-        mconf['use_limb_bias_encoder'] = False
-    if args.no_limb_bias_decoder:
-        mconf['use_limb_bias_decoder'] = False
-    if args.no_position_bias_encoder:
-        mconf['use_position_bias_encoder'] = False
-    if args.no_position_bias_decoder:
-        mconf['use_position_bias_decoder'] = False
+        # limb/position biasを強制的に無効化
+        if args.no_limb_bias_encoder:
+            mconf['use_limb_bias_encoder'] = False
+        if args.no_limb_bias_decoder:
+            mconf['use_limb_bias_decoder'] = False
+        if args.no_position_bias_encoder:
+            mconf['use_position_bias_encoder'] = False
+        if args.no_position_bias_decoder:
+            mconf['use_position_bias_decoder'] = False
 
-    bias_params = _resolve_bias_params(mconf, tokenizer)
-    model = _build_model(mconf, tokenizer, tokenization_method, device, runtime_opts_cp, bias_params)
+        bias_params = _resolve_bias_params(mconf, tokenizer)
+        model = _build_model(mconf, tokenizer, tokenization_method, device, runtime_opts_cp, bias_params)
 
-    validate_vocabulary_compatibility(tokenization_method, tokenizer, ckpt_sd)
-    adapted_sd = adapt_checkpoint_to_model(
-        ckpt_sd, tokenizer.vocab_size,
-        ckpt_sd['token_emb.emb_lookup.weight'].size(0),
-    )
-    model.load_state_dict(adapted_sd, strict=False)
-    model.eval()
-    print(f'モデルロード完了: {model_path}')
+        validate_vocabulary_compatibility(tokenization_method, tokenizer, ckpt_sd)
+        adapted_sd = adapt_checkpoint_to_model(
+            ckpt_sd, tokenizer.vocab_size,
+            ckpt_sd['token_emb.emb_lookup.weight'].size(0),
+        )
+        model.load_state_dict(adapted_sd, strict=False)
+        model.eval()
+        print(f'モデルロード完了: {model_path}')
 
-    # フェーズ1: 生成
-    manifest = phase1_generate(
-        args, model, tokenizer, tokenize_fn, tokenization_method,
-        config, device, difficulty_labels, output_dir, runtime_opts_cp,
-        difficulty_bounds=difficulty_bounds,
-    )
+        # フェーズ1: 生成
+        manifest = phase1_generate(
+            args, model, tokenizer, tokenize_fn, tokenization_method,
+            config, device, difficulty_labels, output_dir, runtime_opts_cp,
+            difficulty_bounds=difficulty_bounds,
+        )
+    else:
+        # アンサンブルデコーディング: 複数チェックポイントをそれぞれ独立にロードする
+        from scripts.generate.generate_drum_ensemble import (
+            load_ensemble_member,
+            validate_ensemble_vocabulary_compatibility,
+        )
+
+        model_paths = [Path(p) for p in args.model_path]
+        first_config = yaml.load(
+            open(model_paths[0].parent.parent / 'config.yaml', 'r'), Loader=yaml.FullLoader
+        )
+        device = first_config['training']['device']
+        print(f'[info] ensemble_decoding=True  n_models={len(model_paths)}  device={device}')
+
+        members = [load_ensemble_member(p, device) for p in model_paths]
+        validate_ensemble_vocabulary_compatibility(members)
+        if any(m['tokenization_method'] == 'cp_limb_v1' for m in members):
+            print('[ERROR] --ensemble_decoding は cp_limb_v1 チェックポイントに対応していません。')
+            sys.exit(1)
+
+        tokenizer = members[0]['tokenizer']       # vocab一致は検証済み
+        tokenization_method = members[0]['tokenization_method']
+        config = members[0]['config']             # enc_seqlen等の共有生成パラメータはmember0を採用
+        for m in members[1:]:
+            if m['config']['data'].get('enc_seqlen') != config['data'].get('enc_seqlen') or \
+                    m['config'].get('generate', {}).get('max_bars') != config.get('generate', {}).get('max_bars'):
+                print(f'[warning] {m["model_path"]} の enc_seqlen/max_bars が先頭モデルと異なります。'
+                      f'先頭モデル({model_paths[0]})の設定を生成ループ共通パラメータとして使用します。')
+
+        print(f'モデルロード完了: {len(members)}個のチェックポイントをアンサンブル')
+
+        # フェーズ1: 生成（アンサンブル）
+        manifest = phase1_generate_ensemble(
+            args, members, tokenizer, config, device, difficulty_labels, output_dir,
+            difficulty_bounds=difficulty_bounds,
+        )
 
     # フェーズ2: 評価
     results = phase2_evaluate(manifest, args, difficulty_bounds, output_dir, difficulty_labels)

@@ -1,11 +1,13 @@
 
 checkpoints=(
-    "checkpoints_drum_standard-lakh1-kl14"
-    "checkpoints_drum_standard-lakh6-kl14"
-    "checkpoints_drum_standard-lakh7-kl14"
-    "checkpoints_drum_standard-lakh8-kl14"
-    "checkpoints_drum_standard-lakh9-kl14"
-    "checkpoints_drum_standard-lakh10-kl14"
+    "checkpoints_drum_standard-lakhaug1-biasloss1"
+    "checkpoints_drum_standard-lakhaug1-biasloss2"
+    "checkpoints_drum_standard-lakhaug1-biasloss3"
+    "checkpoints_drum_standard-lakhaug1-kl12"
+    "checkpoints_drum_standard-lakhaug1-kl13"
+    "checkpoints_drum_standard-lakhaug1-kl14"
+    "checkpoints_drum_standard-lakhaug1-kl15"
+    "checkpoints_drum_standard-lakhaug1-kl16"
 )
 
 # echo "Limb-bias分析結果"
@@ -18,8 +20,7 @@ checkpoints=(
 #         --output_dir output/position_bias/${checkpoint}
 # done
 
-echo "AttentionMap分析結果"
-# Validデータをforwardに通しAttentionMapを可視化
+# echo "AttentionMap分析結果"
 # for checkpoint in "${checkpoints[@]}"; do
 #     python -m scripts.analysis.visualize_attention_maps \
 #         --model_dir trained_model/${checkpoint} \

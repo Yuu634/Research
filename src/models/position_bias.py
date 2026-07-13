@@ -16,12 +16,22 @@ Modes (config: position_bias_mode):
                   αSNARE→KICK ≠ αKICK→SNARE に対応
 """
 
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch
 from torch import nn
 
 from src.models.limb_bias import LIMB_META, expand_for_mha  # noqa: F401
+
+
+# ---------------------------------------------------------------------------
+# Attention Bias Loss: Position（同一タイミング）モード
+#   limb_bias.py の bias_loss（limb 軸）と対になる position 軸のモード。
+#   同じ layer_modes リストに混在させて層ごとの役割割り当てを可能にする。
+# ---------------------------------------------------------------------------
+BIAS_MODE_POS_OVER_OTHER = 'pos_over_other'
+BIAS_MODE_OTHER_OVER_POS = 'other_over_pos'
+POS_BIAS_MODES = (BIAS_MODE_POS_OVER_OTHER, BIAS_MODE_OTHER_OVER_POS)
 
 
 # ---------------------------------------------------------------------------
@@ -219,3 +229,93 @@ class PositionBiasModule(nn.Module):
 
         pair_bias = A[li_i, li_j]  # [B, N, N]  advanced indexing
         return pair_bias * pos_mask  # META ペアは pos_mask=0 でゼロアウト
+
+
+# ---------------------------------------------------------------------------
+# Attention Bias Loss（Position 軸）: Attn_pos / Attn_otherpos 対比を hinge で誘導
+#   limb_bias.build_limb_pair_masks / compute_attn_bias_loss と同型。
+# ---------------------------------------------------------------------------
+
+def build_position_pair_masks(
+    pos_group_ids: torch.Tensor,  # [B, N], long  (build_position_ids の出力)
+    causal: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """pos_group_ids [B, N] → (M_pos, M_other) 各 [B, N, N] float。
+
+    M_pos  : 同一 Position-Group の非メタペア（build_position_bias_mask と同一判定）
+    M_other: 両端が非メタ かつ 異なる Position-Group のペア
+    どちらかがメタ/POS未出現（group_id=0）のペアは両集合から除外される。
+
+    Args:
+        causal: True で下三角のみ有効（デコーダの因果 Attention 用）。
+                掛けないと上三角ペアが平均の分母に入り値が希釈される。
+    """
+    ids_i = pos_group_ids.unsqueeze(2)   # [B, N, 1]
+    ids_j = pos_group_ids.unsqueeze(1)   # [B, 1, N]
+
+    has_no_pos = (ids_i == 0) | (ids_j == 0)   # [B, N, N] bool  (META/未出現)
+    non_meta = ~has_no_pos
+    same_pos = (ids_i == ids_j)                # [B, N, N] bool
+
+    M_pos = same_pos & non_meta
+    M_other = (~same_pos) & non_meta
+
+    if causal:
+        N = pos_group_ids.size(1)
+        tril = torch.tril(
+            torch.ones(N, N, dtype=torch.bool, device=pos_group_ids.device)
+        )   # [N, N]
+        M_pos = M_pos & tril
+        M_other = M_other & tril
+
+    return M_pos.float(), M_other.float()   # [B, N, N] each
+
+
+def compute_attn_pos_bias_loss(
+    attn_maps: Dict[int, torch.Tensor],  # {layer_idx: [B, N, N]}
+    M_pos: torch.Tensor,                 # [B, N, N] float
+    M_other: torch.Tensor,               # [B, N, N] float
+    layer_modes: List[str],
+    margin: float,
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """捕捉した Attention 重みから Attn_pos / Attn_otherpos 対比の hinge 損失を計算。
+
+    limb_bias.compute_attn_bias_loss と同型だが POS_BIAS_MODES の層のみ処理し、
+    limb 系モード・'none' の層はスキップする（1 層 1 モード前提）。
+
+        Attn_pos(l)      = Σ A_l * M_pos   / Σ M_pos
+        Attn_otherpos(l) = Σ A_l * M_other / Σ M_other
+        hinge_l = max(0, margin - (Attn_pos - Attn_otherpos))   # pos_over_other
+                  max(0, margin - (Attn_otherpos - Attn_pos))   # other_over_pos
+
+    Returns:
+        loss    : スカラー Tensor（active 層ゼロなら 0 テンソル）
+        metrics : {'attn_pos/<l>': float, 'attn_otherpos/<l>': float}（ログ用、grad 切断）
+    """
+    device = M_pos.device
+    denom_pos = M_pos.float().sum().clamp_min(1.0)
+    denom_other = M_other.float().sum().clamp_min(1.0)
+
+    hinges: List[torch.Tensor] = []
+    metrics: Dict[str, float] = {}
+    for idx, A in attn_maps.items():
+        mode = layer_modes[idx]
+        if mode not in POS_BIAS_MODES:   # limb 系・'none' はスキップ
+            continue
+        Af = A.float()   # AMP 下の fp16 総和は精度不足 → fp32 で計算
+        attn_pos = (Af * M_pos).sum() / denom_pos
+        attn_other = (Af * M_other).sum() / denom_other
+        metrics[f'attn_pos/{idx}'] = attn_pos.item()
+        metrics[f'attn_otherpos/{idx}'] = attn_other.item()
+
+        if mode == BIAS_MODE_POS_OVER_OTHER:
+            hinge = torch.clamp(margin - (attn_pos - attn_other), min=0.0)
+        else:  # BIAS_MODE_OTHER_OVER_POS
+            hinge = torch.clamp(margin - (attn_other - attn_pos), min=0.0)
+        hinges.append(hinge)
+
+    if hinges:
+        loss = torch.stack(hinges).mean()
+    else:
+        loss = torch.zeros((), device=device)
+    return loss, metrics

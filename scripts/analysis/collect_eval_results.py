@@ -6,9 +6,9 @@ and save as a spreadsheet-compatible CSV file.
 Usage:
     python scripts/analysis/collect_eval_results.py \
         --eval-dir output/eval-bpm2 \
-        --checkpoints checkpoints_drum_standard-lakh1-kl checkpoints_drum_standard-lakh1-kl2 checkpoints_drum_standard-lakh1-kl3 checkpoints_drum_standard-lakh1-kl4 checkpoints_drum_standard-lakh1-kl5 checkpoints_drum_standard-lakh1-kl6 checkpoints_drum_standard-lakh1-kl7 checkpoints_drum_standard-lakh1-kl8 checkpoints_drum_standard-lakh1-kl9 checkpoints_drum_standard-lakh1-kl10 checkpoints_drum_standard-lakh1-kl11 checkpoints_drum_standard-lakh1-kl12 checkpoints_drum_standard-lakh1-kl13 checkpoints_drum_standard-lakh1-kl14 checkpoints_drum_standard-lakh1-kl15 checkpoints_drum_standard-lakh1-kl16 checkpoints_drum_standard-model1-4 checkpoints_drum_standard-model1-5 \
+        --checkpoints checkpoints_drum_standard-lakh1-kl12 checkpoints_drum_standard-lakh1-kl13 checkpoints_drum_standard-lakh1-kl14 checkpoints_drum_standard-lakh1-kl15 checkpoints_drum_standard-lakh1-kl16 checkpoints_drum_standard-lakhaug1-kl12 checkpoints_drum_standard-lakhaug1-kl13 checkpoints_drum_standard-lakhaug1-kl14 checkpoints_drum_standard-lakhaug1-kl15 checkpoints_drum_standard-lakhaug1-kl16 \
         --metrics hihat_similarity rhythm_similarity token_iou Spearman_control \
-        --output output/eval-bpm2/results_table.csv
+        --output output/eval-bpm2/results_table-lakhvslakhaug.csv
 
 Supported metric names:
     hihat_similarity     -> expands to hihat_similarity_reconstruction / hihat_similarity_arrangement

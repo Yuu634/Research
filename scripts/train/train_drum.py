@@ -7,7 +7,28 @@ import time
 import json
 
 from src.models.musemorphose import MuseMorphose
-from src.models.limb_bias import build_token_to_limb_map
+from src.models.limb_bias import (
+    build_token_to_limb_map,
+    build_limb_ids,
+    build_limb_pair_masks,
+    make_limb_lookup_table,
+    AttentionWeightCapture,
+    compute_attn_bias_loss,
+    bias_loss_weight_sched,
+    VALID_BIAS_MODES,
+    VALID_BIAS_SCHEDS,
+    BIAS_MODE_NONE,
+)
+from src.models.position_bias import (
+    build_position_ids,
+    build_position_pair_masks,
+    compute_attn_pos_bias_loss,
+    POS_BIAS_MODES,
+)
+
+# bias_loss の layer_modes で許容する全モード（limb 軸 + position 軸 + none）。
+# limb_bias.py は無改変のため和集合は train 側で定義する。
+ALL_BIAS_MODES = tuple(VALID_BIAS_MODES) + POS_BIAS_MODES
 from src.data.drum_dataloader import DrumTransformerDataset
 from torch.utils.data import DataLoader
 from src.utils.tokenization_mode import (
@@ -230,7 +251,7 @@ def _append_jsonl(log_path, payload):
         f.write(json.dumps(payload, ensure_ascii=False) + '\n')
 
 
-def _log_mode_loss_metrics(ckpt_dir, epoch, trained_steps, tokenization_method, losses):
+def _log_mode_loss_metrics(ckpt_dir, epoch, trained_steps, tokenization_method, losses, bias_metrics=None):
     payload = {
         'epoch': int(epoch),
         'step': int(trained_steps),
@@ -240,6 +261,11 @@ def _log_mode_loss_metrics(ckpt_dir, epoch, trained_steps, tokenization_method, 
         'kldiv_loss': float(losses['kldiv_loss'].item()),
         'kldiv_raw': float(losses['kldiv_raw'].item()),
     }
+    if 'bias_loss' in losses:
+        payload['bias_loss'] = float(losses['bias_loss'].item())
+        payload['bias_weight'] = float(losses.get('bias_weight', 0.0))
+    if bias_metrics:
+        payload.update({k: float(v) for k, v in bias_metrics.items()})
     if tokenization_method == 'cp_limb_v1':
         payload.update({
             'cp_event_type_loss': float(losses['cp_event_type_loss'].item()),
@@ -265,6 +291,86 @@ def _log_loss_failure(ckpt_dir, epoch, trained_steps, batch_idx, tokenization_me
         'shape_context': shape_context,
     }
     _append_jsonl(os.path.join(ckpt_dir, 'loss_failures.jsonl'), payload)
+
+
+def _normalize_layer_modes(raw, n_layer, field_name):
+    """layer_modes を長さ n_layer の文字列リストに正規化して検証する。
+
+    - None → 全層 'none'
+    - 文字列 1 個 → 全層その値に展開
+    - リスト → 長さ n_layer と一致必須
+    """
+    if raw is None:
+        return [BIAS_MODE_NONE] * n_layer
+
+    if isinstance(raw, str):
+        modes = [raw] * n_layer
+    elif isinstance(raw, (list, tuple)):
+        modes = list(raw)
+    else:
+        raise ValueError(
+            f'Invalid {field_name}: must be null, a mode string, or a list of mode strings.'
+        )
+
+    if len(modes) != n_layer:
+        raise ValueError(
+            f'Invalid {field_name}: length {len(modes)} != n_layer {n_layer}.'
+        )
+
+    for m in modes:
+        if m not in ALL_BIAS_MODES:
+            raise ValueError(
+                f'Invalid {field_name} entry {m!r}. Expected one of {ALL_BIAS_MODES}.'
+            )
+    return modes
+
+
+def _validate_bias_loss_config(config):
+    """training.bias_loss を正規化・検証して返す（未指定なら enabled=False）。"""
+    training = config['training']
+    raw = training.get('bias_loss', None)
+    if raw is None or not isinstance(raw, dict):
+        raw = {}
+
+    enabled = bool(raw.get('enabled', False))
+    model = config['model']
+    dec_n_layer = int(model['dec_n_layer'])
+    enc_n_layer = int(model['enc_n_layer'])
+
+    normalized = {
+        'enabled': enabled,
+        'margin': float(raw.get('margin', 0.05)),
+        'max_weight': float(raw.get('max_weight', 1.0)),
+        'sched': raw.get('sched', 'linear_warmup'),
+        'no_loss_steps': int(raw.get('no_loss_steps', 0)),
+        'warmup_steps': int(raw.get('warmup_steps', 0)),
+        'cycle_steps': int(raw.get('cycle_steps', 10000)),
+        'decoder_layer_modes': _normalize_layer_modes(
+            raw.get('decoder_layer_modes', None), dec_n_layer, 'bias_loss.decoder_layer_modes'
+        ),
+        'encoder_layer_modes': _normalize_layer_modes(
+            raw.get('encoder_layer_modes', None), enc_n_layer, 'bias_loss.encoder_layer_modes'
+        ),
+    }
+
+    if enabled:
+        if normalized['margin'] < 0:
+            raise ValueError('Invalid bias_loss.margin: must be >= 0.')
+        if normalized['sched'] not in VALID_BIAS_SCHEDS:
+            raise ValueError(
+                f"Invalid bias_loss.sched {normalized['sched']!r}. Expected one of {VALID_BIAS_SCHEDS}."
+            )
+        if config['data'].get('tokenization_method', 'standard') == 'cp_limb_v1':
+            raise ValueError(
+                'bias_loss is not supported for tokenization_method=cp_limb_v1 (v1 limitation).'
+            )
+        all_modes = normalized['decoder_layer_modes'] + normalized['encoder_layer_modes']
+        if all(m == BIAS_MODE_NONE for m in all_modes):
+            print('[warning] bias_loss.enabled=true but all layer modes are "none". '
+                  'bias_loss will have no effect.')
+
+    training['bias_loss'] = normalized
+    return normalized
 
 
 def _validate_training_config(config):
@@ -314,6 +420,8 @@ def _validate_training_config(config):
     if not config['training'].get('ckpt_dir'):
         raise ValueError('Invalid config: training.ckpt_dir must be provided.')
 
+    _validate_bias_loss_config(config)
+
     return config
 
 
@@ -327,7 +435,100 @@ def _load_state_dict_with_compat(model, state_dict, desc='checkpoint'):
         model.load_state_dict(state_dict, strict=False)
 
 
-def train_model(epoch, model, dloader, dloader_val, optim, sched, config, trained_steps, scaler=None, best_val_loss=float('inf'), early_stopper=None):
+def _set_bias_capture_enabled(bias_ctx, enabled):
+    """bias_ctx 内の全捕捉オブジェクトの enabled を切り替える。"""
+    if bias_ctx is None:
+        return
+    for key in ('capture_dec', 'capture_enc'):
+        if bias_ctx.get(key) is not None:
+            bias_ctx[key].enabled = enabled
+
+
+def _clear_bias_capture(bias_ctx):
+    """捕捉バッファを破棄する（計算グラフ滞留 → OOM 防止のため finally で必ず呼ぶ）。"""
+    if bias_ctx is None:
+        return
+    for key in ('capture_dec', 'capture_enc'):
+        if bias_ctx.get(key) is not None:
+            bias_ctx[key].clear()
+
+
+def _apply_bias_loss(losses, bias_ctx, batch_dec_inp, batch_enc_inp, trained_steps):
+    """bias_loss を計算し losses['total_loss'] に加算する。
+
+    捕捉バッファは本関数内で必ず pop（クリア）する。
+    Returns: (lam, metrics) — lam<=0 や active 層なしの場合は損失を加算しない。
+    """
+    lam = bias_loss_weight_sched(trained_steps, **bias_ctx['sched_kwargs'])
+    maps_dec = bias_ctx['capture_dec'].pop_maps() if bias_ctx['capture_dec'] is not None else {}
+    maps_enc = bias_ctx['capture_enc'].pop_maps() if bias_ctx['capture_enc'] is not None else {}
+
+    if lam <= 0:
+        return 0.0, {}
+
+    bias_terms = []
+    metrics = {}
+    margin = bias_ctx['margin']
+    pt = bias_ctx.get('pos_token_ids')
+
+    def _has_limb(modes):
+        return any(m != BIAS_MODE_NONE and m not in POS_BIAS_MODES for m in modes)
+
+    def _has_pos(modes):
+        return pt is not None and any(m in POS_BIAS_MODES for m in modes)
+
+    if maps_dec:
+        dec_modes = bias_ctx['dec_modes']
+        # dec_inp: [dec_seqlen, B]（sequence-first）
+        if _has_limb(dec_modes):
+            dec_limb_ids = build_limb_ids(batch_dec_inp, bias_ctx['lookup'])
+            M_limb, M_other = build_limb_pair_masks(dec_limb_ids, causal=True)
+            dl, dm = compute_attn_bias_loss(maps_dec, M_limb, M_other, dec_modes, margin)
+            bias_terms.append(dl)
+            metrics.update({f'dec/{k}': v for k, v in dm.items()})
+        if _has_pos(dec_modes):
+            dec_pos_ids = build_position_ids(
+                batch_dec_inp,
+                pos_token_start=pt['pos_start'], pos_token_end=pt['pos_end'],
+                beat_token_start=pt['beat_start'], beat_token_end=pt['beat_end'],
+                bar_token_idx=pt['bar'], pad_token_idx=pt['pad'],
+                limb_lookup_table=bias_ctx['lookup'], eos_token_idx=pt['eos'])
+            Md_pos, Md_other = build_position_pair_masks(dec_pos_ids, causal=True)
+            dpl, dpm = compute_attn_pos_bias_loss(maps_dec, Md_pos, Md_other, dec_modes, margin)
+            bias_terms.append(dpl)
+            metrics.update({f'dec/{k}': v for k, v in dpm.items()})
+    if maps_enc:
+        enc_modes = bias_ctx['enc_modes']
+        # enc_inp: [seqlen, B, n_bars] → flat [seqlen, B*n_bars]（sequence-first）
+        enc_tokens_flat = batch_enc_inp.reshape(batch_enc_inp.size(0), -1)
+        if _has_limb(enc_modes):
+            enc_limb_ids = build_limb_ids(enc_tokens_flat, bias_ctx['lookup'])
+            Me_limb, Me_other = build_limb_pair_masks(enc_limb_ids, causal=False)
+            el, em = compute_attn_bias_loss(maps_enc, Me_limb, Me_other, enc_modes, margin)
+            bias_terms.append(el)
+            metrics.update({f'enc/{k}': v for k, v in em.items()})
+        if _has_pos(enc_modes):
+            enc_pos_ids = build_position_ids(
+                enc_tokens_flat,
+                pos_token_start=pt['pos_start'], pos_token_end=pt['pos_end'],
+                beat_token_start=pt['beat_start'], beat_token_end=pt['beat_end'],
+                bar_token_idx=pt['bar'], pad_token_idx=pt['pad'],
+                limb_lookup_table=bias_ctx['lookup'], eos_token_idx=pt['eos'])
+            Me_pos, Me_other_p = build_position_pair_masks(enc_pos_ids, causal=False)
+            epl, epm = compute_attn_pos_bias_loss(maps_enc, Me_pos, Me_other_p, enc_modes, margin)
+            bias_terms.append(epl)
+            metrics.update({f'enc/{k}': v for k, v in epm.items()})
+
+    if bias_terms:
+        bias_loss = torch.stack(bias_terms).mean()
+        losses['total_loss'] = losses['total_loss'] + lam * bias_loss
+        losses['bias_loss'] = bias_loss.detach()
+        losses['bias_weight'] = lam
+        metrics['bias_loss'] = float(bias_loss.detach().item())
+    return lam, metrics
+
+
+def train_model(epoch, model, dloader, dloader_val, optim, sched, config, trained_steps, scaler=None, best_val_loss=float('inf'), early_stopper=None, bias_ctx=None):
     """モデルの学習（1エポック）"""
     model.train()
 
@@ -415,6 +616,12 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
 
         # ドラム譜では属性は使用しない（Noneを渡す）
         trained_steps += 1
+
+        # bias_loss: λ>0 のステップのみ Attention 重みを捕捉する（λ=0 期間は fast path 温存）
+        bias_metrics = {}
+        if bias_ctx is not None:
+            _lam_upcoming = bias_loss_weight_sched(trained_steps, **bias_ctx['sched_kwargs'])
+            _set_bias_capture_enabled(bias_ctx, _lam_upcoming > 0.0)
 
         # Mixed Precision Training
         if use_amp and scaler is not None:
@@ -533,6 +740,14 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                             }
                         )
                         raise
+
+            # bias_loss を fp32 で計算し total_loss に加算（autocast 外）
+            if bias_ctx is not None:
+                try:
+                    _, bias_metrics = _apply_bias_loss(
+                        losses, bias_ctx, batch_dec_inp, batch_enc_inp, trained_steps)
+                finally:
+                    _clear_bias_capture(bias_ctx)
 
             # 学習率のアニーリング
             if trained_steps < lr_warmup_steps:
@@ -665,6 +880,14 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                     )
                     raise
 
+            # bias_loss を計算し total_loss に加算
+            if bias_ctx is not None:
+                try:
+                    _, bias_metrics = _apply_bias_loss(
+                        losses, bias_ctx, batch_dec_inp, batch_enc_inp, trained_steps)
+                finally:
+                    _clear_bias_capture(bias_ctx)
+
             # 学習率のアニーリング
             if trained_steps < lr_warmup_steps:
                 curr_lr = max_lr * trained_steps / lr_warmup_steps
@@ -699,6 +922,10 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                 f"lf: {losses['cp_left_foot_loss'].item():.4f})"
             )
 
+        if 'bias_loss' in losses:
+            print(f"\t * BL: {losses['bias_loss'].item():.4f} "
+                  f"(λ={losses.get('bias_weight', 0.0):.3f})")
+
         # ログの記録
         if not trained_steps % log_interval:
             log_data = {
@@ -720,10 +947,14 @@ def train_model(epoch, model, dloader, dloader_val, optim, sched, config, traine
                 trained_steps,
                 tokenization_method,
                 losses,
+                bias_metrics=bias_metrics,
             )
 
         # 検証
         if not trained_steps % val_interval:
+            # validation 中は Attention 捕捉を止める（fast path 温存 & メモリ節約）
+            _set_bias_capture_enabled(bias_ctx, False)
+            _clear_bias_capture(bias_ctx)
             vallosses = validate(model, dloader_val, config)
             current_val_loss = np.mean(vallosses[0])  # 再構成損失を使用
             
@@ -1089,16 +1320,25 @@ def main():
         print(f'[info] limb bias alpha: fixed={alpha_limb_fixed}')
     else:
         print('[info] limb bias alpha: learnable')
+    # bias_loss（Attention Bias Loss）も limb ID テーブルを必要とする
+    bias_loss_cfg = config['training']['bias_loss']
+    bias_loss_enabled = bool(bias_loss_cfg['enabled'])
+    # bias_loss で position（同一タイミング）モードを使うか
+    bias_loss_uses_pos = bias_loss_enabled and any(
+        m in POS_BIAS_MODES
+        for m in bias_loss_cfg['decoder_layer_modes'] + bias_loss_cfg['encoder_layer_modes']
+    )
     token_to_limb = None
-    if use_limb_bias_encoder or use_limb_bias_decoder:
+    if use_limb_bias_encoder or use_limb_bias_decoder or bias_loss_enabled:
         idx2token = getattr(dset, 'idx2token', None)
         if idx2token is not None:
             vocab_list = [idx2token.get(i, '') for i in range(dset.vocab_size)]
             token_to_limb = build_token_to_limb_map(vocab_list)
         else:
-            print('[warning] idx2token not found in dataset; limb bias disabled.')
+            print('[warning] idx2token not found in dataset; limb bias / bias_loss disabled.')
             use_limb_bias_encoder = False
             use_limb_bias_decoder = False
+            bias_loss_enabled = False
 
     # position bias 用のパラメータと token ID マップを構築
     use_position_bias_encoder = bool(mconf.get('use_position_bias_encoder', False))
@@ -1112,7 +1352,7 @@ def main():
         print('[info] position bias alpha: learnable')
     position_bias_per_layer = bool(mconf.get('position_bias_per_layer', True))
     pos_token_ids = None
-    if use_position_bias_encoder or use_position_bias_decoder:
+    if use_position_bias_encoder or use_position_bias_decoder or bias_loss_uses_pos:
         t2i = getattr(dset, 'token2idx', None)
         if t2i is not None:
             pos_keys  = sorted([k for k in t2i if k.startswith('<POS_')],  key=lambda k: t2i[k])
@@ -1125,6 +1365,8 @@ def main():
                     'beat_end':   t2i[beat_keys[-1]],
                     'pad':        t2i.get('<PAD>', 0),
                     'eos':        t2i.get('<EOS>', 1),
+                    # bias_loss の pos モードで build_position_ids に渡す（additive 側は未参照）
+                    'bar':        runtime_opts['bar_token_idx'],
                 }
                 print(f'[info] position bias token IDs: {pos_token_ids}')
             else:
@@ -1148,6 +1390,18 @@ def main():
             use_position_bias_encoder = False
             use_position_bias_decoder = False
             pos_token_ids = None
+
+    # bias_loss の pos モードは pos_token_ids（POS/BEAT トークン）を必須とする。
+    # 構築できなかった場合は該当層を 'none' に降格する。
+    if bias_loss_uses_pos and pos_token_ids is None:
+        print('[warning] bias_loss pos modes require POS/BEAT tokens which are unavailable; '
+              'downgrading pos-mode layers to "none".')
+        for _key in ('decoder_layer_modes', 'encoder_layer_modes'):
+            bias_loss_cfg[_key] = [
+                BIAS_MODE_NONE if m in POS_BIAS_MODES else m
+                for m in bias_loss_cfg[_key]
+            ]
+        bias_loss_uses_pos = False
 
     # まずCPU上でモデルを構築
     model = MuseMorphose(
@@ -1233,6 +1487,57 @@ def main():
 
     model.train()
 
+    # ===== Attention Bias Loss のセットアップ =====
+    bias_ctx = None
+    if bias_loss_enabled and token_to_limb is not None:
+        dec_modes = bias_loss_cfg['decoder_layer_modes']
+        enc_modes = bias_loss_cfg['encoder_layer_modes']
+        bias_lookup_table = make_limb_lookup_table(token_to_limb, dset.vocab_size).to(device)
+
+        # デコーダ側の対象層（mode != 'none'）に捕捉パッチを付ける
+        capture_dec = None
+        dec_active = {i: model.decoder.decoder_layers[i]
+                      for i, m in enumerate(dec_modes) if m != BIAS_MODE_NONE}
+        if dec_active:
+            capture_dec = AttentionWeightCapture(dec_active).attach()
+
+        # エンコーダ側の対象層（encoder_layer_modes 指定時のみ）
+        capture_enc = None
+        enc_active_idx = [i for i, m in enumerate(enc_modes) if m != BIAS_MODE_NONE]
+        if enc_active_idx:
+            if hasattr(model.encoder, 'encoder_layers'):
+                enc_layer_list = list(model.encoder.encoder_layers)
+            else:
+                enc_layer_list = list(model.encoder.tr_encoder.layers)
+            enc_active = {i: enc_layer_list[i] for i in enc_active_idx}
+            capture_enc = AttentionWeightCapture(enc_active).attach()
+
+        if capture_dec is not None or capture_enc is not None:
+            bias_ctx = {
+                'capture_dec': capture_dec,
+                'capture_enc': capture_enc,
+                'dec_modes': dec_modes,
+                'enc_modes': enc_modes,
+                'lookup': bias_lookup_table,
+                'margin': bias_loss_cfg['margin'],
+                # pos モード用（未使用時は None → _apply_bias_loss で pos 分岐をスキップ）
+                'pos_token_ids': pos_token_ids if bias_loss_uses_pos else None,
+                'enc_n_head': mconf['enc_n_head'],
+                'dec_n_head': mconf['dec_n_head'],
+                'sched_kwargs': {
+                    'sched': bias_loss_cfg['sched'],
+                    'max_weight': bias_loss_cfg['max_weight'],
+                    'no_loss_steps': bias_loss_cfg['no_loss_steps'],
+                    'warmup_steps': bias_loss_cfg['warmup_steps'],
+                    'cycle_steps': bias_loss_cfg['cycle_steps'],
+                },
+            }
+            print(f'[info] Attention Bias Loss enabled: '
+                  f'margin={bias_loss_cfg["margin"]}, sched={bias_loss_cfg["sched"]}, '
+                  f'max_weight={bias_loss_cfg["max_weight"]}')
+            print(f'[info]   decoder_layer_modes={dec_modes}')
+            print(f'[info]   encoder_layer_modes={enc_modes}')
+
     # オプティマイザーを構築
     opt_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = optim.Adam(opt_params, lr=max_lr)
@@ -1298,6 +1603,7 @@ def main():
             scaler=scaler,
             best_val_loss=best_val_loss,
             early_stopper=early_stopper,
+            bias_ctx=bias_ctx,
         )
         if early_stopper is not None and early_stopper.triggered:
             break

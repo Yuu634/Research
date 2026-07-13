@@ -1,19 +1,21 @@
 echo "性能評価"
 
 checkpoints=(
-    "checkpoints_drum_standard-lakhaug1-kl12"
-    "checkpoints_drum_standard-lakhaug1-kl13"
-    "checkpoints_drum_standard-lakhaug1-kl14"
-    "checkpoints_drum_standard-lakhaug1-kl15"
-    "checkpoints_drum_standard-lakhaug1-kl16"
+    "checkpoints_drum_standard-lakhaug1-biasloss12"
+    "checkpoints_drum_standard-lakhaug1-biasloss13"
+    "checkpoints_drum_standard-lakhaug1-biasloss14"
+    "checkpoints_drum_standard-lakhaug1-biasloss15"
+    "checkpoints_drum_standard-lakhaug1-biasloss4-2"
+    "checkpoints_drum_standard-lakhaug1-biasloss9-2"
 )
 
-model_kind="-lakhaug" # "" or "-lakh" or "-lakhaug" 
+model_kind="-lakhaug" # "" or "-lakh" or "-lakhaug"
+test_dir="data/test_dataset" # "data/real_test" or "data/test_dataset""
 
 # difficulty_mode: global_shift, upper_cap, full_assign
 for checkpoint in "${checkpoints[@]}"; do
     python -m scripts.evaluate.evaluate \
-        --input_midi_dir data/test_dataset \
+        --input_midi_dir ${test_dir} \
         --model_path trained_model/${checkpoint}/params/best_params.pt \
         --difficulty_bounds data/metadata_new/difficulty_bounds_standard${model_kind}.pkl \
         --difficulty_labels_file <(echo '[
