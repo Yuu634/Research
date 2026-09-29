@@ -13,3 +13,7 @@ trained_model/
 **/*.zip
 *.sh.e*
 *.sh.o*
+
+# 手動トークン検証で再生成する成果物
+tests/test_token/output/
+tests/test_token/sample_midis/
