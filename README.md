@@ -20,7 +20,21 @@ conda activate musemorphose
 CPU での学習は `bash tasks/train.sh --device cpu` で指定できます。
 依存ファイルは直接依存を列挙したもので、過去の学習環境を固定したロックファイルではありません。
 
-## 前処理
+## 学習・評価データの収集
+
+Lakh MIDI、Groove MIDI、Groove2Groove を採用しています。
+原データ、メタデータ、ドラム抽出 MIDI、トークン pkl を `data/` の別ディレクトリに保存します。
+
+```bash
+python -m scripts.preprocess.download_drum_sources
+python -m scripts.preprocess.build_drum_collection --workers 16
+python -m scripts.preprocess.validate_drum_collection --workers 16 --sample-per-group 16
+```
+
+出典、変換方針、公式分割、除外理由、実測件数は [収集記録](docs/DATA_COLLECTION.md) を参照してください。
+この収集工程の pkl は難易度ラベル付与前の形式です。基準モデルの学習に使う前に別途ラベルを付与します。
+
+## 基準モデル用の前処理
 
 E-GMD を `data/raw/e-gmd/`、展開済み Lakh MIDI を `data/raw/lmd_full/` に用意します。
 
