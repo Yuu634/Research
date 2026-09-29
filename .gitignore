@@ -1,10 +1,13 @@
 __pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
 
-.claude/worktrees/*
+.claude/
 data/*/
-logs/*
-output/*
-trained_model/*
+logs/
+output/
+trained_model/
 
 **/*.tar.gz
 **/*.zip

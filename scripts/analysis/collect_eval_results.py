@@ -5,10 +5,10 @@ and save as a spreadsheet-compatible CSV file.
 
 Usage:
     python scripts/analysis/collect_eval_results.py \
-        --eval-dir output/eval-bpm2 \
-        --checkpoints checkpoints_drum_standard-lakh1-kl12 checkpoints_drum_standard-lakh1-kl13 checkpoints_drum_standard-lakh1-kl14 checkpoints_drum_standard-lakh1-kl15 checkpoints_drum_standard-lakh1-kl16 checkpoints_drum_standard-lakhaug1-kl12 checkpoints_drum_standard-lakhaug1-kl13 checkpoints_drum_standard-lakhaug1-kl14 checkpoints_drum_standard-lakhaug1-kl15 checkpoints_drum_standard-lakhaug1-kl16 \
+        --eval-dir output/eval \
+        --checkpoints checkpoints_drum_standard-lakh1-kl14 \
         --metrics hihat_similarity rhythm_similarity token_iou Spearman_control \
-        --output output/eval-bpm2/results_table-lakhvslakhaug.csv
+        --output output/eval/results_table.csv
 
 Supported metric names:
     hihat_similarity     -> expands to hihat_similarity_reconstruction / hihat_similarity_arrangement
@@ -30,7 +30,7 @@ import csv
 import json
 from pathlib import Path
 
-EVAL_DIR = Path(__file__).parent.parent.parent / "output" / "eval-bpm2"
+EVAL_DIR = Path(__file__).parent.parent.parent / "output" / "eval"
 
 METRIC_ALIASES = {
     "hihat_similarity": "mean_hihat_similarity",
@@ -108,7 +108,7 @@ def main():
         "--checkpoints", "-c",
         nargs="+",
         required=True,
-        help="Checkpoint directory names under output/eval-new/.",
+        help="Checkpoint directory names under output/eval/.",
     )
     parser.add_argument(
         "--metrics", "-m",

@@ -1,2 +1,4 @@
-echo "学習曲線作成スクリプト（trained_model/ 以下の全チェックポイントを処理）"
-python -m src.utils.plot_loss_curves --trained_model_dir trained_model
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+python -m src.utils.plot_loss_curves --trained_model_dir trained_model "$@"

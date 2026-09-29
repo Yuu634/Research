@@ -1,7 +1,2 @@
-# ドラム譜MuseMorphose用の依存関係
-torch>=1.6.0
-miditoolkit
-PyYAML
-scipy
-numpy
-tqdm
+# 既存のセットアップコマンドとの互換用
+-r requirements.txt

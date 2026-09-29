@@ -1314,6 +1314,9 @@ if __name__ == "__main__":
                         help='Path to input drum MIDI file')
     parser.add_argument('--output_midi', type=str, required=True,
                         help='Path to output MIDI file')
+    parser.add_argument('--difficulty_bounds', type=str,
+                        default='data/metadata_new/difficulty_bounds_standard-lakh.pkl',
+                        help='難易度境界値の pkl ファイル（既定: standard-lakh）')
     parser.add_argument('--difficulty_mode', type=str,
                         choices=['full_assign', 'global_shift', 'upper_cap'],
                         default='global_shift',
@@ -1419,7 +1422,7 @@ if __name__ == "__main__":
     print(f'[info] Vocabulary size: {tokenizer.vocab_size}')
     
     # 難易度境界値を読み込み
-    difficulty_bounds_path = Path('data/metadata/difficulty_bounds_standard.pkl')
+    difficulty_bounds_path = Path(args.difficulty_bounds)
     if not difficulty_bounds_path.exists():
         print(f'[ERROR] Difficulty bounds file not found: {difficulty_bounds_path}')
         sys.exit(1)

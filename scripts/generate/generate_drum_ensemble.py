@@ -17,7 +17,7 @@ importしており、本ファイルとevaluate.pyの間に循環importは無い
 （evaluate.pyは本ファイルをimportしない）が、依存の向きが従来と逆になる点に注意。
 
 使用方法:
-    python scripts/generate/generate_drum_ensemble.py \\
+    python -m scripts.generate.generate_drum_ensemble \\
         --model_paths ckpt1/params/best_params.pt ckpt2/params/best_params.pt \\
         --output output_ensemble --n_pieces 5 --n_samples_per_piece 3
 """
@@ -80,7 +80,7 @@ def _peek_device(model_path: Path) -> str:
 def load_ensemble_member(model_path: Path, device: str) -> Dict[str, Any]:
     """
     1チェックポイントを、そのチェックポイント自身のconfig.yamlから構築する。
-    biaslossチェックポイント群はそれぞれ独立にuse_limb_bias_*/use_position_bias_*/
+    チェックポイント群はそれぞれ独立にuse_limb_bias_*/use_position_bias_*/
     cond_mode等を持つため、共有configは使わずチェックポイントごとにフレッシュに
     yaml.loadし直す（evaluate.pyの単一モデルロード手順と同一ロジックを1個ずつ適用）。
 
@@ -496,9 +496,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example:
-  python scripts/generate/generate_drum_ensemble.py \\
-    --model_paths trained_model/checkpoints_drum_standard-lakhaug1-biasloss1/params/best_params.pt \\
-                  trained_model/checkpoints_drum_standard-lakhaug1-biasloss5/params/best_params.pt \\
+  python -m scripts.generate.generate_drum_ensemble \\
+    --model_paths <model_a>/params/best_params.pt \\
+                  <model_b>/params/best_params.pt \\
     --output output_ensemble --n_pieces 5 --n_samples_per_piece 3
         """,
     )
