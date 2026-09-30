@@ -168,3 +168,11 @@ python -m scripts.preprocess.validate_drum_collection --workers 16 \
   --sample-per-group 16 \
   --include-ids data/metadata/drum_collection_v1/boundary_note_repair.json
 ```
+
+## 難易度ラベルの追加（2026-09-30）
+
+この収集結果を入力として、[承認済みの属性v2](ATTRIBUTE_FORMULA_REVIEW.md)による
+ラベリングを別ディレクトリ `data/processed/drum_collection_difficulty_v2/` へ実施した。
+元のトークン・分割は保持し、移動モデルの適用外となる曲を除外した分割リストは
+`data/metadata/drum_collection_difficulty_v2/` に置く。
+利用時は[実施結果と除外の内訳](ATTRIBUTE_V2_RESULTS.md)を確認すること。

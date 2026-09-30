@@ -36,6 +36,28 @@ bash tasks/analysis.sh trained_model/checkpoints_drum_standard-lakh1-kl14 traine
 
 ## 学習・評価の比較
 
+難易度属性v2は[承認済み算出式](ATTRIBUTE_FORMULA_REVIEW.md)と[実装・ラベリング結果](ATTRIBUTE_V2_RESULTS.md)を参照。
+旧式・基準YAML・既存チェックポイントは維持し、新ラベルを別ディレクトリへ生成する。
+
+| スクリプト／モジュール | 用途 |
+|---|---|
+| `src/data/drum_difficulty_v2.py` | 秒単位の打撃負荷、手足非同期、2手の移動DP、LZ反復性 |
+| `scripts/preprocess/label_drum_difficulty_v2.py` | 生スコア算出、train限定の境界推定、pkl付与、全件検証 |
+| `scripts/evaluate/evaluate_rhythm_attribute_v2.py` | Zenodo 40刺激の知覚的複雑さとの相関診断 |
+
+ラベリングは既存依存で実行できる。Zenodo診断だけは追加依存rdataを使う。
+以下の`--no-deps`はNumPy・pandas・xarray・typing_extensionsが既にある環境向け。
+新規環境では`--no-deps`を外して依存もインストールする。
+
+```bash
+python -m scripts.preprocess.label_drum_difficulty_v2 --help
+python -m pip install --no-deps --target output/revise_attribute_v2/deps -r requirements_attribute_v2.txt
+python -m scripts.evaluate.evaluate_rhythm_attribute_v2 --help
+```
+
+6番目のs_rhythmは検証用の反復性ラベル。現行5属性モデルの条件には追加しない。
+v2クラスはv1と意味が異なるため、既存チェックポイントの条件値として置き換えない。
+
 ```bash
 python -m src.utils.plot_loss --log trained_model/baseline/log.txt trained_model/variant/log.txt --output output/loss_comparison
 python -m src.utils.plot_valloss --log trained_model/baseline/valloss.txt trained_model/variant/valloss.txt --output output/val_comparison
