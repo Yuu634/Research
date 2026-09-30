@@ -5,6 +5,10 @@ __pycache__/
 
 .claude/
 data/*/
+!data/pairdata/
+data/pairdata/*
+!data/pairdata/*.py
+!data/pairdata/*.md
 logs/
 output/
 trained_model/

@@ -72,6 +72,20 @@ bash tasks/evaluate_ensemble.sh output/eval/ensemble trained_model/baseline/para
 
 ## データ拡張・追加データの前処理
 
+難易度v2付き譜面からの擬似編曲ペアは、[data/pairdata](../data/pairdata/README.md)に実装と結果をまとめた。
+`core.py`が小節の類似度と難→易の選択、`build.py`が大量生成と重複除外、
+`validate.py`が全ペアの再計算、`io.py`が学習用シャードの読み込みを担当する。
+ユーザーの配置指定により、このデータ作成CLIは以下のpackage形式で実行する。
+
+```bash
+python -m data.pairdata.build --workers 24
+python -m data.pairdata.validate --workers 24
+```
+
+元の曲分割を保持し、現在小節の内容が分割をまたぐペアを除外する。
+文脈の区間名は不明として扱い、代理特徴を用いた擬似ペアであることを明示する。
+出力は `data/processed/drum_pairdata_v1/`、再開用バッチは `data/work/drum_pairdata_v1/`。
+
 ```bash
 python -m data.augment_drum_midi --input_dir data/filtered/lakhmidi --output_dir data/filtered/lakh_augment --augment_hihat --augment_location --seed 42
 python -m data.cleaning_groove_full --help
