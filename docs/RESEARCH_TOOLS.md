@@ -78,6 +78,21 @@ python -m scripts.generate.arrange_beam_search --input output/beamsearch_step3/a
 再検証CLIは選定モデルの全履歴を再生し、譜面・指標の一致を検査する。
 推論CLIはJSON・打点位置図・試聴用MIDIを出力する。人手による編曲品質評価は未実施。
 
+ルールベース×MuseMorphoseの実装は[段階別の確認資料と実行方法](BEAM_MUSE_STEP6_REVIEW.md)を参照。
+`src/musemorphose`・`src/beamsearch`・`src/beam_muse`を3方式の入口とし、既存共通実装を保持する。
+`src/beam_muse/features.py`は原譜の骨格抽出、`conditioning.py`は符号付き相対／絶対条件、
+`losses.py`は再構成・KL・系列方策勾配、`evaluation.py`は共通評価を担当する。
+
+```bash
+bash tasks/beam_muse.sh smoke output/beam_muse_step6_smoke --device cpu
+python -m scripts.evaluate.report_beam_muse --run output/beam_muse_step6_smoke
+```
+
+`scripts/train/tune_beam_muse.py`は中間譜面準備・train学習・val選定・固定後のtest/itest評価を分離する。
+`config/beam_muse_candidates.json`でモデル・損失・学習パラメータを比較する。
+`scripts/generate/arrange_beam_muse.py`は新形式のcheckpointから1小節を編曲する。
+本規模学習は未実施であり、smokeの重みを性能検証済みモデルとして扱わない。
+
 難易度属性v2は[承認済み算出式](ATTRIBUTE_FORMULA_REVIEW.md)と[実装・ラベリング結果](ATTRIBUTE_V2_RESULTS.md)を参照。
 旧式・基準YAML・既存チェックポイントは維持し、新ラベルを別ディレクトリへ生成する。
 
