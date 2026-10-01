@@ -36,6 +36,17 @@ bash tasks/analysis.sh trained_model/checkpoints_drum_standard-lakh1-kl14 traine
 
 ## 学習・評価の比較
 
+ルールベースBeamSearchのステップ1は[編曲ルールの確認資料](BEAMSEARCH_STEP1_REVIEW.md)を参照。
+`src/arrangement/representation.py`は音符・奏法の保持、`rules.py`は65編集関数、
+`safety.py`は骨格保護・累積編集制限、`examples.py`は固定人工例を担当する。
+以下で変更前後図と試聴用MIDIを生成する。探索・モデル選定は段階確認後に実装する。
+
+```bash
+python -m scripts.evaluate.review_arrangement_rules
+```
+
+出力は`output/beamsearch_step1/`。実運用の候補には`apply_rule`で安全制約を適用する。
+
 難易度属性v2は[承認済み算出式](ATTRIBUTE_FORMULA_REVIEW.md)と[実装・ラベリング結果](ATTRIBUTE_V2_RESULTS.md)を参照。
 旧式・基準YAML・既存チェックポイントは維持し、新ラベルを別ディレクトリへ生成する。
 
