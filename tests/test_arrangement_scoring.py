@@ -5,11 +5,11 @@ import math
 import numpy as np
 import pytest
 
-from src.arrangement.examples import make_bar
-from src.arrangement.representation import Bar, Note, to_tokens
-from src.arrangement.rules import apply_rule
-from src.arrangement.safety import Guards
-from src.arrangement.scoring import (
+from src.common.examples import make_bar
+from src.common.representation import Bar, Note, to_tokens
+from src.beamsearch.rules import apply_rule
+from src.common.safety import Guards
+from src.beamsearch.scoring import (
     DIFFICULTY_KEYS, ScoreConfig, ScoringModel, musical_edit_distance, skeleton_similarity,
 )
 from src.data.drum_difficulty_v2 import ATTRS

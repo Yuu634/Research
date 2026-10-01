@@ -6,9 +6,9 @@ import json
 from functools import cached_property
 from time import perf_counter
 
-from src.arrangement.representation import Bar
-from src.arrangement.rules import Context, REGISTRY, apply_rule
-from src.arrangement.scoring import ScoreBreakdown, ScoringModel
+from src.common.representation import Bar
+from src.beamsearch.rules import Context, REGISTRY, apply_rule
+from src.beamsearch.scoring import ScoreBreakdown, ScoringModel
 
 
 @dataclass(frozen=True)

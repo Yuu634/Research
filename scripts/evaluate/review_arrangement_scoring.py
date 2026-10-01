@@ -8,10 +8,10 @@ from pathlib import Path
 import pickle
 
 from scripts.evaluate.review_arrangement_rules import svg
-from src.arrangement.examples import make_bar
-from src.arrangement.rules import apply_rule
-from src.arrangement.safety import default_guards
-from src.arrangement.scoring import DIFFICULTY_KEYS,ScoreConfig,ScoringModel
+from src.common.examples import make_bar
+from src.beamsearch.rules import apply_rule
+from src.common.safety import default_guards
+from src.beamsearch.scoring import DIFFICULTY_KEYS,ScoreConfig,ScoringModel
 
 
 def main():
@@ -46,7 +46,7 @@ def main():
         target_note='固定人工例で2ルールを適用した譜面の難易度。学習・重み調整・モデル選定には使用しない。',
         bounds_sha256=hashlib.sha256((args.meta/'bounds.json').read_bytes()).hexdigest(),
         formula_sha256=hashlib.sha256(Path('src/data/drum_difficulty_v2.py').read_bytes()).hexdigest(),
-        scoring_sha256=hashlib.sha256(Path('src/arrangement/scoring.py').read_bytes()).hexdigest(),cases=rows)
+        scoring_sha256=hashlib.sha256(Path('src/beamsearch/scoring.py').read_bytes()).hexdigest(),cases=rows)
     args.output.mkdir(parents=True,exist_ok=True)
     (args.output/'review.json').write_text(json.dumps(report,ensure_ascii=False,indent=2,allow_nan=False)+'\n')
     header='''<!doctype html><html lang="ja"><meta charset="utf-8"><title>探索スコア：ステップ2</title>

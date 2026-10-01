@@ -5,11 +5,11 @@ import re
 
 import pytest
 
-from src.arrangement import safety
-from src.arrangement.examples import examples,make_bar,PARAMETERS
-from src.arrangement.representation import Bar,Note,from_tokens,to_tokens
-from src.arrangement.rules import REGISTRY,apply_rule
-from src.arrangement.safety import Guards,edits,violations
+from src.common import safety
+from src.common.examples import examples,make_bar,PARAMETERS
+from src.common.representation import Bar,Note,from_tokens,to_tokens
+from src.beamsearch.rules import REGISTRY,apply_rule
+from src.common.safety import Guards,edits,violations
 
 RELAXED=Guards(max_added=None,max_deleted=None,max_edit_ratio=None)
 

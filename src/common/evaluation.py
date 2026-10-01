@@ -4,7 +4,8 @@ from dataclasses import asdict, dataclass
 import math
 from statistics import mean, median
 
-from src.arrangement.scoring import DIFFICULTY_KEYS, musical_edit_distance, skeleton_similarity
+from src.common.difficulty import DIFFICULTY_KEYS
+from src.common.metrics import musical_edit_distance, skeleton_similarity
 
 EPSILON = 1e-12
 # 探索モデルの重みを変更しても、この評価用の成分重みは変えない。

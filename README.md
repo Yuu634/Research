@@ -96,6 +96,10 @@ python -m scripts.analysis.collect_eval_results \
 ## 構成と整理方針
 
 - `src/`: モデル、トークナイザー、データローダー、難易度計算、MIDI 変換。
+- `src/beamsearch/`: 編曲ルール・BeamSearch・探索スコア。
+- `src/musemorphose/`: VAE・Encoder/Decoder・Bias・ニューラル生成。
+- `src/beam_muse/`: BeamSearchとMuseMorphoseの接続・比較実験。
+- `src/common/`: 譜面表現・入力検証・保護制約・条件・損失・評価。
 - `scripts/`: 前処理・学習・生成・評価と評価結果の集計。
 - `tasks/`: 基準モデルを使う実行手順。
 - `tests/`: 現行共通部品の回帰テスト。
@@ -104,6 +108,7 @@ python -m scripts.analysis.collect_eval_results \
 環境固有のジョブ、保存済み出力と Python キャッシュを削除しました。
 今後の改良で再利用する分析・データ拡張・トークン検証・回帰比較のスクリプトは保持します。
 [研究用ツール一覧と実行方法](docs/RESEARCH_TOOLS.md) を参照してください。
+[ディレクトリ移行と既存成果物の扱い](docs/SOURCE_LAYOUT.md)に、旧パスとの対応と検証結果を記載しています。
 
 CP・REMI・Bias の共通実装と、評価から参照されるアンサンブル処理は依存関係維持のため残しています。
 モデル本体とトークン ID の定義は変更していません。

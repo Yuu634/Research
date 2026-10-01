@@ -2,9 +2,9 @@
 from dataclasses import asdict, dataclass, replace
 import math
 
-from src.arrangement.representation import Bar, from_tokens, to_tokens
-from src.arrangement.safety import Guards, default_guards, violations
-from src.arrangement.scoring import DIFFICULTY_KEYS, Difficulty, ScoringModel
+from src.common.representation import Bar, from_tokens, to_tokens
+from src.common.safety import Guards, default_guards, violations
+from src.common.difficulty import DIFFICULTY_KEYS, Difficulty
 
 
 def _object(value, required, optional=()):
@@ -128,7 +128,7 @@ class PreparedInput:
         )
 
 
-def prepare_input(payload, model: ScoringModel):
+def prepare_input(payload, model):
     _object(payload, ('schema_version', 'original', 'previous', 'target'),
             ('following', 'context', 'extra_locked_ids'))
     if type(payload['schema_version']) is not int or payload['schema_version'] != 1:

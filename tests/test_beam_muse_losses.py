@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from src.beam_muse.losses import LossConfig, policy_loss, reconstruction_kl
+from src.common.losses import LossConfig, policy_loss, reconstruction_kl
 
 
 def test_policy_gradient_lowers_probability_of_worse_action():

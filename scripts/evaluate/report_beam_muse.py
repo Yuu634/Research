@@ -6,6 +6,7 @@ from pathlib import Path
 
 from data.pairdata.io import file_hash
 from src.beam_muse.data import source_hashes
+from src.common.provenance import validate_sources
 from src.beam_muse.experiment import expand_trials, selection_key
 
 
@@ -14,8 +15,7 @@ def report(run):
     record = json.loads((run/'run.json').read_text())
     if selected['identity'] != record['identity'] or selected['selected_on'] != 'val':
         raise ValueError('実行記録とval選定記録が不一致')
-    if record['identity']['sources'] != source_hashes():
-        raise ValueError('実験後に実装が変更された')
+    validate_sources(record['identity']['sources'], source_hashes())
     trials = expand_trials(record['identity']['config'])
     completed = []
     for trial in trials:

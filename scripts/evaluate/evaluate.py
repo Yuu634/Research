@@ -36,8 +36,8 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.models.musemorphose import MuseMorphose
-from src.models.limb_bias import build_token_to_limb_map
+from src.musemorphose.model import MuseMorphose
+from src.musemorphose.limb_bias import build_token_to_limb_map
 from src.tokenizers.drum_tokenizer import DrumTokenizer
 from src.utils.drum_to_midi import tokens_to_midi, cp_data_to_midi
 from src.utils.tokenization_mode import validate_tokenization_method

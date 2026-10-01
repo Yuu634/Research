@@ -5,12 +5,12 @@ from itertools import product
 import pytest
 
 from scripts.evaluate.compare_arrangement_models import load_candidates, selection_key
-from src.arrangement.beam_search import Action, SearchConfig, beam_search, standard_actions
-from src.arrangement.examples import make_bar
-from src.arrangement.inputs import bar_to_payload, prepare_input
-from src.arrangement.rules import REGISTRY, apply_rule
-from src.arrangement.scoring import ScoreConfig, ScoringModel
-from src.arrangement.representation import to_tokens
+from src.beamsearch.beam_search import Action, SearchConfig, beam_search, standard_actions
+from src.common.examples import make_bar
+from src.common.inputs import bar_to_payload, prepare_input
+from src.beamsearch.rules import REGISTRY, apply_rule
+from src.beamsearch.scoring import ScoreConfig, ScoringModel
+from src.common.representation import to_tokens
 from src.data.drum_difficulty_v2 import ATTRS
 
 

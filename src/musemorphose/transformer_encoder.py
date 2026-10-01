@@ -54,7 +54,7 @@ class VAETransformerEncoder(nn.Module):
 
     # Position Bias パラメータ
     if use_position_bias:
-      from src.models.position_bias import PositionBiasModule
+      from src.musemorphose.position_bias import PositionBiasModule
       self.position_bias_module = PositionBiasModule(
         mode=position_bias_mode,
         n_layers=n_layer,
@@ -68,7 +68,7 @@ class VAETransformerEncoder(nn.Module):
   def forward(self, x, padding_mask=None, anchor_positions=None,
               limb_bias=None, position_bias=None, limb_ids_for_pos_bias=None):
     if self._use_per_layer_loop:
-      from src.models.limb_bias import expand_for_mha
+      from src.musemorphose.limb_bias import expand_for_mha
       out = x
       for i in range(self.n_layer):
         effective_mask = None

@@ -4,11 +4,11 @@ import math
 import torch
 from torch import nn
 
-from src.models.musemorphose import VAETransformerDecoder
-from src.models.transformer_encoder import VAETransformerEncoder
-from src.models.transformer_helpers import PositionalEncoding
-from src.beam_muse.features import FEATURE_SIZE
-from src.beam_muse.conditioning import difficulty_condition
+from src.musemorphose.model import VAETransformerDecoder
+from src.musemorphose.transformer_encoder import VAETransformerEncoder
+from src.musemorphose.transformer_helpers import PositionalEncoding
+from src.common.skeleton import FEATURE_SIZE
+from src.common.conditioning import difficulty_condition
 
 
 @dataclass(frozen=True)

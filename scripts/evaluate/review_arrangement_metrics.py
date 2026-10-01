@@ -12,10 +12,10 @@ from time import perf_counter
 
 from scripts.evaluate.review_arrangement_inputs import example_requests, read_request
 from scripts.evaluate.review_arrangement_rules import svg
-from src.arrangement.evaluation import EvaluationConfig, evaluate_result, summarize_results
-from src.arrangement.inputs import prepare_input, request_from_pair
-from src.arrangement.rules import apply_rule
-from src.arrangement.scoring import ScoringModel
+from src.common.evaluation import EvaluationConfig, evaluate_result, summarize_results
+from src.common.inputs import prepare_input, request_from_pair
+from src.beamsearch.rules import apply_rule
+from src.beamsearch.scoring import ScoringModel
 
 
 def fixed_rules(prepared, names):
@@ -141,12 +141,12 @@ def main():
             purpose = '無編集と固定のHH間引き→Ghost削除による指標診断。探索・学習・モデル選定は未実施です。'
         provenance = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in (
             ('bounds_sha256', bounds_path), ('vocabulary_sha256', vocab_path),
-            ('evaluation_sha256', Path('src/arrangement/evaluation.py')),
-            ('scoring_sha256', Path('src/arrangement/scoring.py')),
-            ('inputs_sha256', Path('src/arrangement/inputs.py')),
+            ('evaluation_sha256', Path('src/common/evaluation.py')),
+            ('scoring_sha256', Path('src/beamsearch/scoring.py')),
+            ('inputs_sha256', Path('src/common/inputs.py')),
             ('review_cli_sha256', Path(__file__)),
             ('formula_sha256', Path('src/data/drum_difficulty_v2.py')),
-            ('rules_sha256', Path('src/arrangement/rules.py')),
+            ('rules_sha256', Path('src/beamsearch/rules.py')),
         )}
         report = dict(purpose=purpose, evaluation_config=asdict(config), provenance=provenance,
                       input_manifest=manifests, split=args.split if args.pairdata else None,

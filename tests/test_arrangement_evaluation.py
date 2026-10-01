@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from src.arrangement.evaluation import EvaluationConfig, evaluate_result, summarize_results
-from src.arrangement.examples import make_bar
-from src.arrangement.inputs import bar_to_payload, prepare_input
-from src.arrangement.representation import to_tokens
-from src.arrangement.rules import apply_rule
-from src.arrangement.scoring import DIFFICULTY_KEYS, ScoreConfig, ScoringModel
+from src.common.evaluation import EvaluationConfig, evaluate_result, summarize_results
+from src.common.examples import make_bar
+from src.common.inputs import bar_to_payload, prepare_input
+from src.common.representation import to_tokens
+from src.beamsearch.rules import apply_rule
+from src.beamsearch.scoring import DIFFICULTY_KEYS, ScoreConfig, ScoringModel
 from src.data.drum_difficulty_v2 import ATTRS
 
 

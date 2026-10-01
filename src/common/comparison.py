@@ -3,9 +3,9 @@ from dataclasses import replace
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from src.arrangement.evaluation import EvaluationConfig, evaluate_result, summarize_results
-from src.arrangement.scoring import musical_edit_distance, skeleton_similarity
-from src.arrangement.safety import violations
+from src.common.evaluation import EvaluationConfig, evaluate_result, summarize_results
+from src.common.metrics import musical_edit_distance, skeleton_similarity
+from src.common.safety import violations
 from src.data.drum_difficulty_calculator import HAND_INSTRUMENTS, FOOT_INSTRUMENTS
 
 

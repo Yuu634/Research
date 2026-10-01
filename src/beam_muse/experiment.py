@@ -10,9 +10,10 @@ import torch
 
 from data.pairdata.io import file_hash, write_json
 from src.beam_muse.data import collate, load_cache, load_metadata, source_hashes
-from src.beam_muse.evaluation import evaluate_output, sequence_costs, summarize_outputs
-from src.beam_muse.generation import Grammar, generate, score_generation
-from src.beam_muse.losses import LossConfig, policy_loss, reconstruction_kl
+from src.common.comparison import evaluate_output, sequence_costs, summarize_outputs
+from src.musemorphose.generation import Grammar, generate, score_generation
+from src.common.losses import LossConfig, policy_loss, reconstruction_kl
+from src.common.provenance import validate_sources
 from src.beam_muse.model import BeamMuseMorphose
 from src.musemorphose.conditional import ConditionalMuseMorphose, ModelConfig
 
@@ -175,8 +176,7 @@ def load_checkpoint(path, vocabulary, identity=None, device='cpu'):
     checkpoint = torch.load(path, map_location='cpu', weights_only=True)
     if checkpoint['schema_version'] != 1 or (identity is not None and checkpoint['identity'] != identity):
         raise ValueError('checkpoint形式または学習時の入力・設定が異なる')
-    if checkpoint['identity']['sources'] != source_hashes():
-        raise ValueError('checkpoint作成後に実装が変更された')
+    validate_sources(checkpoint['identity']['sources'], source_hashes())
     trial = checkpoint['trial']
     model = build_model(trial['variant'], ModelConfig(**trial['model']), vocabulary)
     model.load_state_dict(checkpoint['state_dict'], strict=True)

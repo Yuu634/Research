@@ -8,10 +8,10 @@ from pathlib import Path
 import pickle
 
 from scripts.evaluate.review_arrangement_rules import svg
-from src.arrangement.examples import make_bar
-from src.arrangement.inputs import bar_to_payload, prepare_input, request_from_pair
-from src.arrangement.rules import apply_rule
-from src.arrangement.scoring import ScoringModel
+from src.common.examples import make_bar
+from src.common.inputs import bar_to_payload, prepare_input, request_from_pair
+from src.beamsearch.rules import apply_rule
+from src.beamsearch.scoring import ScoringModel
 
 
 def _unique_object(items):
@@ -83,8 +83,8 @@ def main():
         prepared = {name: prepare_input(payload, model) for name, payload in requests.items()}
         provenance = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in (
             ('bounds_sha256', bounds_path), ('vocabulary_sha256', vocab_path),
-            ('input_parser_sha256', Path('src/arrangement/inputs.py')),
-            ('scoring_sha256', Path('src/arrangement/scoring.py')),
+            ('input_parser_sha256', Path('src/common/inputs.py')),
+            ('scoring_sha256', Path('src/beamsearch/scoring.py')),
             ('formula_sha256', Path('src/data/drum_difficulty_v2.py')),
         )}
         args.output.mkdir(parents=True, exist_ok=True)

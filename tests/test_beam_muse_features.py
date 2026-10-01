@@ -2,8 +2,8 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from src.arrangement.examples import make_bar
-from src.beam_muse.features import FEATURE_SIZE, extract_skeleton
+from src.common.examples import make_bar
+from src.common.skeleton import FEATURE_SIZE, extract_skeleton
 
 
 def test_original_positions_and_explicit_annotations():

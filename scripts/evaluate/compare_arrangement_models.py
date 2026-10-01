@@ -12,16 +12,14 @@ from time import perf_counter
 
 from data.pairdata.io import file_hash, iter_pairs, read_pickle, write_json, write_pickle
 from scripts.evaluate.review_arrangement_metrics import fixed_rules
-from src.arrangement.beam_search import SearchConfig, beam_search, standard_actions
-from src.arrangement.evaluation import EvaluationConfig, evaluate_result, summarize_results
-from src.arrangement.inputs import prepare_input, request_from_pair
-from src.arrangement.scoring import ScoreConfig, ScoringModel
+from src.beamsearch.beam_search import SearchConfig, beam_search, standard_actions
+from src.common.evaluation import EvaluationConfig, evaluate_result, summarize_results
+from src.common.inputs import prepare_input, request_from_pair
+from src.beamsearch.scoring import ScoreConfig, ScoringModel
+from src.common.provenance import implementation_files
 
 WORKER = {}
-SOURCE_FILES = [f'src/arrangement/{name}.py' for name in (
-    'representation', 'rules', 'safety', 'scoring', 'inputs', 'evaluation', 'beam_search')]
-SOURCE_FILES += ['src/data/drum_difficulty_v2.py', 'src/data/drum_difficulty_calculator.py',
-                 'scripts/evaluate/review_arrangement_metrics.py', __file__]
+SOURCE_FILES = implementation_files('beamsearch')
 CONTROLS = [dict(name='no_edit', control=True), dict(name='hh_then_ghost', control=True)]
 
 

@@ -3,7 +3,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 import math
 
-from src.arrangement.representation import Bar, LEVELS
+from src.common.representation import Bar, LEVELS
 from src.data.drum_difficulty_calculator import HAND_INSTRUMENTS
 
 

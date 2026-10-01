@@ -8,9 +8,9 @@ import re
 
 import mido
 
-from src.arrangement.examples import examples, PARAMETERS
-from src.arrangement.rules import REGISTRY, apply_rule
-from src.arrangement.safety import Guards, edits
+from src.common.examples import examples, PARAMETERS
+from src.beamsearch.rules import REGISTRY, apply_rule
+from src.common.safety import Guards, edits
 
 PITCH={'kick':36,'snare':38,'snare_rim':37,'hh_closed':42,'hh_open':46,'hh_pedal':44,
        'tom_high':50,'tom_mid':47,'tom_low':45,'floor':43,'crash':49,'ride_cymbal':51,

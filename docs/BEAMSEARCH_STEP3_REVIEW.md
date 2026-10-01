@@ -87,7 +87,7 @@ v2のクラス0〜7を7で割った値を使用し、境界値は再推定しな
 
 ## 実装と確認例
 
-- 入力API：`src/arrangement/inputs.py`の`prepare_input(payload, model)`
+- 入力API：`src/common/inputs.py`の`prepare_input(payload, model)`
 - CLI：`scripts/evaluate/review_arrangement_inputs.py`
 - テスト：`tests/test_arrangement_inputs.py`
 - [絶対値と差分の比較HTML](../output/beamsearch_step3/index.html)

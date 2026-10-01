@@ -41,8 +41,8 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.data.drum_dataloader import DrumTransformerDataset
-from src.models.musemorphose import MuseMorphose
-from src.models.limb_bias import build_token_to_limb_map
+from src.musemorphose.model import MuseMorphose
+from src.musemorphose.limb_bias import build_token_to_limb_map
 from torch.utils.data import DataLoader
 
 

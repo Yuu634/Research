@@ -27,10 +27,10 @@ Chokeの音響表現を忠実に再現する用途には使わない。明示さ
 
 | ファイル | 内容 |
 |---|---|
-| `src/arrangement/representation.py` | 不変の小節・音符表現とstandardトークン変換 |
-| `src/arrangement/rules.py` | 編集ルール65関数と安全制約付きの適用入口 |
-| `src/arrangement/safety.py` | 骨格・安全制約11関数、原譜に対する編集量の検査 |
-| `src/arrangement/examples.py` | 人が確認できる固定人工例 |
+| `src/common/representation.py` | 不変の小節・音符表現とstandardトークン変換 |
+| `src/beamsearch/rules.py` | 編集ルール65関数と安全制約付きの適用入口 |
+| `src/common/safety.py` | 骨格・安全制約11関数、原譜に対する編集量の検査 |
+| `src/common/examples.py` | 人が確認できる固定人工例 |
 | `scripts/evaluate/review_arrangement_rules.py` | HTML・JSON・MIDIの生成CLI |
 | `tests/test_arrangement_rules.py` | 参照76項目の網羅性、動作、保護、累積制約のテスト |
 
@@ -92,9 +92,9 @@ Chokeの音響表現を忠実に再現する用途には使わない。明示さ
 後続の連続適用では常に最初の原譜を`original`へ渡し、累積編集制限を確認する。
 
 ```python
-from src.arrangement.representation import from_tokens
-from src.arrangement.rules import apply_rule
-from src.arrangement.safety import default_guards
+from src.common.representation import from_tokens
+from src.beamsearch.rules import apply_rule
+from src.common.safety import default_guards
 
 original = from_tokens(tokens)  # standardの文字列トークン、単一小節＋EOS
 guards = default_guards(original)

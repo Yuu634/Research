@@ -2,9 +2,9 @@
 from dataclasses import dataclass
 import torch
 
-from src.arrangement.representation import INSTRUMENTS, from_tokens
+from src.common.representation import INSTRUMENTS, from_tokens
 from src.data.drum_difficulty_calculator import HAND_INSTRUMENTS
-from src.beam_muse.evaluation import align_note_ids
+from src.common.comparison import align_note_ids
 
 
 class Grammar:

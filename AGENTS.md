@@ -7,10 +7,15 @@
 ## 構成と実行
 
 - `src/`: モデル、データローダー、トークナイザー、共通処理。
+- `src/beamsearch/`: 編曲ルール・探索・探索スコア。
+- `src/musemorphose/`: 単体VAE・Transformer・Bias・ニューラル生成。
+- `src/beam_muse/`: 両モデルの接続・中間譜面準備・比較実験。
+- `src/common/`: 譜面表現・条件・難易度・制約・損失・共通評価。
 - `scripts/`: 前処理・学習・生成・評価の CLI。
 - `tasks/`: 基準設定で実行する Bash スクリプト。
 - `tests/`: 共通部品とパイプラインの回帰テスト。
 - リポジトリ直下から `python -m scripts...` で実行し、package import を使用してください。
+- `common`からモデル実装へ、単体モデルから`beam_muse`へのimportを追加しないでください。
 
 ## 変更時の確認
 

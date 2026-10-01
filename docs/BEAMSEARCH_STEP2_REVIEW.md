@@ -9,7 +9,7 @@ BeamSearch本体、学習、評価指標、モデル比較・選定、pushは後
 
 - [7例の譜面とスコア内訳（HTML）](../output/beamsearch_step2/index.html)
 - [生スコア・クラス・成分・寄与のJSON](../output/beamsearch_step2/review.json)
-- 実装：`src/arrangement/scoring.py`
+- 実装：`src/beamsearch/scoring.py`
 - 再生成CLI：`scripts/evaluate/review_arrangement_scoring.py`
 - テスト：`tests/test_arrangement_scoring.py`
 
@@ -122,7 +122,7 @@ L_{\mathrm{edit}}=\frac{\max(A,B)}{\max(1,N_{original})}.
 図の負値を含むベクトルや属性順序の違いを、外部入力でどう扱うかはステップ3で確認する。
 
 ```python
-from src.arrangement.scoring import ScoringModel
+from src.beamsearch.scoring import ScoringModel
 
 model = ScoringModel(boundaries, vocabulary)
 target = {

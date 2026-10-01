@@ -1,6 +1,6 @@
-from src.arrangement.examples import make_bar
-from src.arrangement.safety import edits
-from src.beam_muse.evaluation import align_note_ids
+from src.common.examples import make_bar
+from src.common.safety import edits
+from src.common.comparison import align_note_ids
 
 
 def test_ids_are_matched_by_music_not_token_order():

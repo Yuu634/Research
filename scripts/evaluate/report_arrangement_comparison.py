@@ -10,10 +10,11 @@ from pathlib import Path
 from data.pairdata.io import file_hash, read_pickle, write_json
 from scripts.evaluate.compare_arrangement_models import selection_key
 from scripts.evaluate.review_arrangement_rules import midi, svg
-from src.arrangement.evaluation import evaluate_result
-from src.arrangement.beam_search import SearchConfig
-from src.arrangement.rules import apply_rule
-from src.arrangement.selected_model import load_selected_model
+from src.common.evaluation import evaluate_result
+from src.beamsearch.beam_search import SearchConfig
+from src.beamsearch.rules import apply_rule
+from src.beamsearch.selected_model import load_selected_model
+from src.common.provenance import implementation_hashes, validate_sources
 
 
 def export_selected_settings(selected, model, output):
@@ -30,9 +31,7 @@ def report(args):
     run_manifest = json.loads((args.run/'run_manifest.json').read_text())
     if file_hash(args.run/'run_manifest.json') != selected['run_manifest_sha256']:
         raise ValueError('選定後に実行記録が変更された')
-    for path, digest in run_manifest['sources'].items():
-        if file_hash(path) != digest:
-            raise ValueError('実験時から実装が変更された: ' + path)
+    validate_sources(run_manifest['sources'], implementation_hashes('beamsearch'))
     summaries = {split: json.loads((args.run/split/'summaries.json').read_text()) for split in ('val', 'test', 'itest')}
     candidates = run_manifest['config']['candidates']
     ranking = sorted((c['name'] for c in candidates), key=lambda name: selection_key(name, summaries['val'][name]))

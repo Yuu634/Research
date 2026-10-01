@@ -130,8 +130,8 @@ testでは3,996/6,697件で無編集よりMAEが改善し、MAE悪化は0件だ�
 
 | ファイル | 用途 |
 |---|---|
-| `src/arrangement/beam_search.py` | アクション集合・探索・履歴・予算・候補検査 |
-| `src/arrangement/selected_model.py` | 選定設定と対応メタデータの復元 |
+| `src/beamsearch/beam_search.py` | アクション集合・探索・履歴・予算・候補検査 |
+| `src/beamsearch/selected_model.py` | 選定設定と対応メタデータの復元 |
 | `config/beamsearch_candidates.json` | 6候補と固定の評価閾値 |
 | `config/beamsearch_selected.json` | 選定済みの推論用パラメータ設定 |
 | `scripts/evaluate/compare_arrangement_models.py` | 並列比較・val選定・選定後のtest/itest評価・再開 |

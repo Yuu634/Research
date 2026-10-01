@@ -22,7 +22,7 @@ Attention（**Attn_other**）の「注意の向け方」の対比を、補助損
 
 | # | 要件 | 本設計での対応 |
 |---|------|----------------|
-| R1 | できれば `src/models/limb_bias.py` と `scripts/train/train_drum.py` のみの修正 | **達成**。Attention 重みは self_attn.forward のモンキーパッチで捕捉（既存 `scripts/analysis/visualize_attention_maps.py` の `AttentionCapture` と同方式、勾配保持版）。`musemorphose.py` / `transformer_encoder.py` は無変更 |
+| R1 | できれば `src/musemorphose/limb_bias.py` と `scripts/train/train_drum.py` のみの修正 | **達成**。Attention 重みは self_attn.forward のモンキーパッチで捕捉（既存 `scripts/analysis/visualize_attention_maps.py` の `AttentionCapture` と同方式、勾配保持版）。`musemorphose.py` / `transformer_encoder.py` は無変更 |
 | R2 | Attn_limb と Attn_other の注意向け方の特徴を増大するバイアス | hinge 型 bias_loss（§4） |
 | R3 | モデル層ごとに別々の Attention バイアスを設定可能 | 層ごとの `layer_modes` リスト。bias_loss モードに加え、加算バイアス α（`limb_bias_alpha`）の層別固定値も指定可能（§5） |
 | R4 | 追加ハイパーパラメータは bias_loss とそのスケジューラーのみ | `training.bias_loss` ブロックに集約（§5） |
@@ -164,7 +164,7 @@ training:
 
 ## 6. ファイル別修正内容
 
-### 6.1 `src/models/limb_bias.py`（追加のみ、既存関数は無変更）
+### 6.1 `src/musemorphose/limb_bias.py`（追加のみ、既存関数は無変更）
 
 #### (a) `build_limb_pair_masks(limb_ids, causal=False) -> (M_limb, M_other)`
 

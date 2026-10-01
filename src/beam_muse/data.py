@@ -8,10 +8,11 @@ import numpy as np
 import torch
 
 from data.pairdata.io import file_hash, iter_pairs, read_pickle, write_json, write_pickle
-from src.arrangement.inputs import parse_bar, prepare_input, request_from_pair
-from src.arrangement.representation import to_tokens
+from src.common.inputs import parse_bar, prepare_input, request_from_pair
+from src.common.representation import to_tokens
 from src.beamsearch import beam_search, load_selected_model
-from src.beam_muse.features import extract_skeleton
+from src.common.skeleton import extract_skeleton
+from src.common.provenance import implementation_hashes, validate_sources
 
 
 @dataclass
@@ -86,12 +87,7 @@ def collate(examples, vocabulary, scorer, variant, device='cpu', *, training=Tru
 
 
 def source_hashes():
-    paths = list(Path('src/arrangement').glob('*.py')) + list(Path('src/beam_muse').glob('*.py'))
-    paths += list(Path('src/musemorphose').glob('*.py')) + list(Path('src/models').glob('*.py'))
-    paths += [Path('src/data/drum_difficulty_v2.py'), Path('src/data/drum_difficulty_calculator.py')]
-    paths += [Path('data/pairdata/io.py'), Path('scripts/train/tune_beam_muse.py'),
-              Path('scripts/generate/arrange_beam_muse.py')]
-    return {str(p): file_hash(p) for p in sorted(paths)}
+    return implementation_hashes('beam_muse')
 
 
 def prepare_cache(pairdata, meta, selected_model, output, *, max_tokens=512, smoke_limit=None):
@@ -110,8 +106,9 @@ def prepare_cache(pairdata, meta, selected_model, output, *, max_tokens=512, smo
     manifest_path = output/'manifest.json'
     if manifest_path.exists():
         saved = json.loads(manifest_path.read_text())
-        if saved['identity'] != identity:
+        if {k: v for k, v in saved['identity'].items() if k != 'sources'} != {k: v for k, v in identity.items() if k != 'sources'}:
             raise ValueError('入力・設定・実装が変わったため別のキャッシュ出力先が必要')
+        validate_sources(saved['identity']['sources'], identity['sources'])
         for split, info in saved['splits'].items():
             if file_hash(output/f'{split}.pkl.gz') != info['sha256']:
                 raise ValueError('キャッシュ破損')
@@ -152,8 +149,7 @@ def load_cache(root, split, meta, selected_model):
     for key, path in (('vocabulary', Path(meta)/'drum_vocab.pkl'), ('bounds', Path(meta)/'bounds.json'), ('beam_model', selected_model)):
         if file_hash(path) != identity[key]:
             raise ValueError('キャッシュのメタデータ不一致: '+key)
-    if identity['sources'] != source_hashes():
-        raise ValueError('キャッシュ作成後に実装が変更された')
+    validate_sources(identity['sources'], source_hashes())
     if split not in manifest['splits'] or file_hash(root/f'{split}.pkl.gz') != manifest['splits'][split]['sha256']:
         raise ValueError('分割がない、またはキャッシュが破損')
     return read_pickle(root/f'{split}.pkl.gz'), manifest

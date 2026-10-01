@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 if torch is not None:
-    from src.models.musemorphose import MuseMorphose
+    from src.musemorphose.model import MuseMorphose
 else:
     MuseMorphose = None
 

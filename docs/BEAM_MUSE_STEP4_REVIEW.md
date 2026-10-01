@@ -1,6 +1,6 @@
 # ステップ4：損失関数
 
-損失を`src/beam_muse/losses.py`、離散譜面の採点を`evaluation.py`に分けた。
+損失を`src/common/losses.py`、離散譜面の採点を`src/common/comparison.py`に分けた。
 
 ## 再構成とKL
 

@@ -5,16 +5,16 @@ import numpy as np
 import pytest
 import torch
 
-from src.arrangement.beam_search import Action, SearchConfig
-from src.arrangement.evaluation import EvaluationConfig
-from src.arrangement.examples import make_bar
-from src.arrangement.inputs import bar_to_payload, prepare_input
-from src.arrangement.representation import to_tokens
-from src.arrangement.scoring import ScoringModel
+from src.beamsearch.beam_search import Action, SearchConfig
+from src.common.evaluation import EvaluationConfig
+from src.common.examples import make_bar
+from src.common.inputs import bar_to_payload, prepare_input
+from src.common.representation import to_tokens
+from src.beamsearch.scoring import ScoringModel
 from src.beam_muse.data import Example, collate, source_hashes
-from src.beam_muse.evaluation import context_distance, evaluate_output, sequence_costs, summarize_outputs
+from src.common.comparison import context_distance, evaluate_output, sequence_costs, summarize_outputs
 from src.beam_muse.experiment import build_model, expand_trials, load_checkpoint, train_trial, run_experiment
-from src.beam_muse.generation import Grammar, generate, score_generation
+from src.musemorphose.generation import Grammar, generate, score_generation
 from src.data.drum_difficulty_v2 import ATTRS
 from src.musemorphose.conditional import ModelConfig
 

@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import pickle
+from src.common.serialization import loads_local_pickle
 
 
 def file_hash(path):
@@ -29,7 +30,7 @@ def write_pickle(path,value):
 
 
 def read_pickle(path):
-    return pickle.loads(gzip.decompress(Path(path).read_bytes()))
+    return loads_local_pickle(gzip.decompress(Path(path).read_bytes()))
 
 
 def iter_pairs(root,split='train'):

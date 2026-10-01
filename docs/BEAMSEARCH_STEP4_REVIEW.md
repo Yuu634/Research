@@ -97,7 +97,7 @@
 
 ## 実装と使い方
 
-- API：`src/arrangement/evaluation.py`の`evaluate_result`、`summarize_results`
+- API：`src/common/evaluation.py`の`evaluate_result`、`summarize_results`
 - CLI：`scripts/evaluate/review_arrangement_metrics.py`
 - テスト：`tests/test_arrangement_evaluation.py`
 - [人工例の譜面・指標](../output/beamsearch_step4/index.html)
@@ -107,7 +107,7 @@
 出力トークンから再採番すると、ステップ1のIDに基づく保護判定が一致しなくなる。
 
 ```python
-from src.arrangement.evaluation import evaluate_result, summarize_results
+from src.common.evaluation import evaluate_result, summarize_results
 
 row = evaluate_result(prepared, candidate, model,
                       case_id='入力の識別子', source_id='元楽曲の識別子',

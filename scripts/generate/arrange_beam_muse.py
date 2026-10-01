@@ -10,13 +10,13 @@ import torch
 from data.pairdata.io import file_hash, write_json
 from scripts.evaluate.review_arrangement_inputs import read_request
 from scripts.evaluate.review_arrangement_rules import midi, svg
-from src.arrangement.inputs import prepare_input
+from src.common.inputs import prepare_input
 from src.beamsearch import beam_search
 from src.beam_muse.data import Example, collate, load_metadata
-from src.beam_muse.evaluation import evaluate_output
+from src.common.comparison import evaluate_output
 from src.beam_muse.experiment import load_checkpoint
-from src.beam_muse.features import extract_skeleton
-from src.beam_muse.generation import generate
+from src.common.skeleton import extract_skeleton
+from src.musemorphose.generation import generate
 
 
 def main():

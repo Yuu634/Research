@@ -2,12 +2,12 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from typing import List, Optional
-from src.models.transformer_encoder import VAETransformerEncoder
-from src.models.transformer_helpers import (
+from src.musemorphose.transformer_encoder import VAETransformerEncoder
+from src.musemorphose.transformer_helpers import (
   weights_init, PositionalEncoding, HierarchicalDrumPositionalEncoding,
   TokenEmbedding, CpCompositeEmbedding, generate_causal_mask
 )
-from src.models.limb_bias import (
+from src.musemorphose.limb_bias import (
   build_limb_ids, build_limb_bias_mask, expand_for_mha, make_limb_lookup_table
 )
 
@@ -58,7 +58,7 @@ class VAETransformerDecoder(nn.Module):
 
     # Position Bias パラメータ
     if use_position_bias:
-      from src.models.position_bias import PositionBiasModule
+      from src.musemorphose.position_bias import PositionBiasModule
       self.position_bias_module = PositionBiasModule(
         mode=position_bias_mode,
         n_layers=n_layer,
@@ -213,7 +213,7 @@ class MuseMorphose(nn.Module):
     self.use_position_bias_decoder = use_position_bias_decoder
 
     # ===== Per-layer Bias Schedule の計算 =====
-    from src.models.bias_schedule import build_layer_bias_schedule
+    from src.musemorphose.bias_schedule import build_layer_bias_schedule
     enc_layer_bias_schedule = build_layer_bias_schedule(
       enc_n_layer, bias_schedule_encoder, bias_schedule_encoder_custom
     )
@@ -724,7 +724,7 @@ class MuseMorphose(nn.Module):
     dec_limb_ids_for_pos = None
     _pos_ready = (self._pos_token_start is not None and hasattr(self, 'token_to_limb_table'))
     if (self.use_position_bias_encoder or self.use_position_bias_decoder) and _pos_ready:
-      from src.models.position_bias import build_position_ids, build_position_bias_mask
+      from src.musemorphose.position_bias import build_position_ids, build_position_bias_mask
 
       if self.use_position_bias_encoder:
         _enc_limb_tbl = self.token_to_limb_table

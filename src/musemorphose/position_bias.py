@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 from torch import nn
 
-from src.models.limb_bias import LIMB_META, expand_for_mha  # noqa: F401
+from src.musemorphose.limb_bias import LIMB_META, expand_for_mha  # noqa: F401
 
 
 # ---------------------------------------------------------------------------

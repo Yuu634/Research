@@ -34,7 +34,7 @@ import miditoolkit
 # パス設定
 sys.path.append('./model')
 
-from src.models.musemorphose import MuseMorphose
+from src.musemorphose.model import MuseMorphose
 from src.tokenizers.drum_tokenizer import DrumTokenizer
 from src.tokenizers.drum_cp_tokenizer import DrumCPTokenizer
 from src.data.drum_difficulty_calculator import (

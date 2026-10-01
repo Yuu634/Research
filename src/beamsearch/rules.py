@@ -3,8 +3,8 @@ from dataclasses import dataclass, replace
 from collections import defaultdict
 import math
 
-from src.arrangement.representation import Bar, Note
-from src.arrangement.safety import Guards, default_guards, edits, priority, violations
+from src.common.representation import Bar, Note
+from src.common.safety import Guards, default_guards, edits, priority, violations
 from src.data.drum_difficulty_calculator import HAND_INSTRUMENTS, FOOT_INSTRUMENTS, DISTANCE_MATRIX, TOKEN_TO_DISTANCE_KEY
 
 HH={'hh_closed','hh_open'}

@@ -37,8 +37,8 @@ bash tasks/analysis.sh trained_model/checkpoints_drum_standard-lakh1-kl14 traine
 ## 学習・評価の比較
 
 ルールベースBeamSearchのステップ1は[編曲ルールの確認資料](BEAMSEARCH_STEP1_REVIEW.md)を参照。
-`src/arrangement/representation.py`は音符・奏法の保持、`rules.py`は65編集関数、
-`safety.py`は骨格保護・累積編集制限、`examples.py`は固定人工例を担当する。
+`src/common/representation.py`は音符・奏法の保持、`src/beamsearch/rules.py`は65編集関数、
+`src/common/safety.py`は骨格保護・累積編集制限、`src/common/examples.py`は固定人工例を担当する。
 以下で変更前後図と試聴用MIDIを生成する。探索・モデル選定は後述のステップ5のCLIを使う。
 
 ```bash
@@ -47,23 +47,24 @@ python -m scripts.evaluate.review_arrangement_rules
 
 出力は`output/beamsearch_step1/`。実運用の候補には`apply_rule`で安全制約を適用する。
 
-ステップ2の`src/arrangement/scoring.py`は難易度一致・骨格保持・ルール数・編集量の採点器。
+ステップ2の`src/beamsearch/scoring.py`は難易度一致・骨格保持・ルール数・編集量の採点器。
+難易度計算は`src/common/difficulty.py`、骨格類似度と編集距離は`src/common/metrics.py`を共用する。
 [探索スコアの確認資料](BEAMSEARCH_STEP2_REVIEW.md)に式・係数・固定例の内訳を記録した。
 `python -m scripts.evaluate.review_arrangement_scoring`で`output/beamsearch_step2/`へHTML・JSONを生成する。
 係数は確認用の初期値。選定済み設定とBeamSearch本体は後述のステップ5を参照。
 
-ステップ3の`src/arrangement/inputs.py`は小節・前後文脈・目標・保護情報の検証と入力変換を担当する。
+ステップ3の`src/common/inputs.py`は小節・前後文脈・目標・保護情報の検証と入力変換を担当する。
 [入力内容の確認資料](BEAMSEARCH_STEP3_REVIEW.md)に絶対値／差分の指定方法を記載した。
 `python -m scripts.evaluate.review_arrangement_inputs --examples`で入力例と確認HTMLを生成する。
 `--input`でJSON、`--pairdata`で生成済みペアを検証できる。探索は実行しない。
 
-ステップ4の`src/arrangement/evaluation.py`は固定基準で目標到達・骨格保持・編集量を評価し、
+ステップ4の`src/common/evaluation.py`は固定基準で目標到達・骨格保持・編集量を評価し、
 無出力・違反も含む成功率と曲単位マクロ平均を計算する。
 [評価指標の確認資料](BEAMSEARCH_STEP4_REVIEW.md)に定義・閾値・分母・選定方針案を記載した。
 `python -m scripts.evaluate.review_arrangement_metrics --examples`で人工例のHTML・JSON・CSVを生成する。
 `--pairdata`で無編集と固定ルール列を診断できる。BeamSearch・モデル選定にはステップ5のCLIを使う。
 
-ステップ5の`src/arrangement/beam_search.py`は原譜の制約を保つBeamSearch本体。
+ステップ5の`src/beamsearch/beam_search.py`は原譜の制約を保つBeamSearch本体。
 [比較実験・選定の確認資料](BEAMSEARCH_STEP5_REVIEW.md)に探索仕様と結果を記載する。
 `config/beamsearch_candidates.json`で探索幅・深さ・係数を比較し、
 `config/beamsearch_selected.json`を推論用の選定設定として使う。
@@ -79,13 +80,14 @@ python -m scripts.generate.arrange_beam_search --input output/beamsearch_step3/a
 推論CLIはJSON・打点位置図・試聴用MIDIを出力する。人手による編曲品質評価は未実施。
 
 ルールベース×MuseMorphoseの実装は[段階別の確認資料と実行方法](BEAM_MUSE_STEP6_REVIEW.md)を参照。
-`src/musemorphose`・`src/beamsearch`・`src/beam_muse`を3方式の入口とし、既存共通実装を保持する。
-`src/beam_muse/features.py`は原譜の骨格抽出、`conditioning.py`は符号付き相対／絶対条件、
-`losses.py`は再構成・KL・系列方策勾配、`evaluation.py`は共通評価を担当する。
+`src/musemorphose`・`src/beamsearch`・`src/beam_muse`に実装本体を配置し、共通部品は`src/common`へまとめる。
+`src/common/skeleton.py`は原譜の骨格抽出、`src/common/conditioning.py`は符号付き相対／絶対条件、
+`src/common/losses.py`は再構成・KL・系列方策勾配、`src/common/comparison.py`は3方式の比較評価を担当する。
+旧パス・キャッシュ・重み・実装ハッシュの扱いは[ディレクトリ移行記録](SOURCE_LAYOUT.md)を参照。
 
 ```bash
-bash tasks/beam_muse.sh smoke output/beam_muse_step6_smoke --device cpu
-python -m scripts.evaluate.report_beam_muse --run output/beam_muse_step6_smoke
+bash tasks/beam_muse.sh smoke output/beam_muse_layout_smoke --device cpu
+python -m scripts.evaluate.report_beam_muse --run output/beam_muse_layout_smoke
 ```
 
 `scripts/train/tune_beam_muse.py`は中間譜面準備・train学習・val選定・固定後のtest/itest評価を分離する。

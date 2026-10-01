@@ -8,12 +8,12 @@ import mido
 import pytest
 
 from scripts.generate.arrange_beam_search import main
-from src.arrangement.beam_search import Action
-from src.arrangement.examples import make_bar
-from src.arrangement.inputs import bar_to_payload
-from src.arrangement.representation import to_tokens
-from src.arrangement.scoring import ScoringModel
-from src.arrangement.selected_model import load_selected_model
+from src.beamsearch.beam_search import Action
+from src.common.examples import make_bar
+from src.common.inputs import bar_to_payload
+from src.common.representation import to_tokens
+from src.beamsearch.scoring import ScoringModel
+from src.beamsearch.selected_model import load_selected_model
 from src.data.drum_difficulty_v2 import ATTRS
 
 

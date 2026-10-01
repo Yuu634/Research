@@ -1,6 +1,6 @@
 """ルールの意味を人目で確認するための固定人工例。学習・選定用データではない。"""
 from dataclasses import replace
-from src.arrangement.representation import Bar, Note
+from src.common.representation import Bar, Note
 
 
 def make_bar(events,**kwargs):

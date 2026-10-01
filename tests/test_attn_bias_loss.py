@@ -1,4 +1,4 @@
-"""Attention Bias Loss（src/models/limb_bias.py 追加分）の単体テスト。
+"""Attention Bias Loss（src/musemorphose/limb_bias.py 追加分）の単体テスト。
 
 docs/DESIGN_attn_bias_loss.md §8 のテスト計画に対応する:
   - build_limb_pair_masks: 相互排他・メタ除外・下三角
@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.models.limb_bias import (
+from src.musemorphose.limb_bias import (
     build_limb_pair_masks,
     build_limb_bias_mask,
     compute_attn_bias_loss,
@@ -24,7 +24,7 @@ from src.models.limb_bias import (
     AttentionWeightCapture,
     LIMB_META, LIMB_HAND, LIMB_RFOOT, LIMB_HAND_LFOOT,
 )
-from src.models.position_bias import (
+from src.musemorphose.position_bias import (
     build_position_bias_mask,
     build_position_pair_masks,
     compute_attn_pos_bias_loss,

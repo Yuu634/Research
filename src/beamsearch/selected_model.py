@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 import pickle
 
-from src.arrangement.beam_search import Action, SearchConfig
-from src.arrangement.evaluation import EvaluationConfig
-from src.arrangement.scoring import ScoreConfig, ScoringModel
+from src.beamsearch.beam_search import Action, SearchConfig
+from src.common.evaluation import EvaluationConfig
+from src.beamsearch.scoring import ScoreConfig, ScoringModel
 
 
 def load_selected_model(path, meta):

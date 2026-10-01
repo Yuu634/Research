@@ -5,10 +5,10 @@ import json
 import pytest
 
 from scripts.evaluate.review_arrangement_inputs import read_request
-from src.arrangement.examples import make_bar
-from src.arrangement.inputs import bar_to_payload, parse_bar, prepare_input, request_from_pair
-from src.arrangement.representation import to_tokens
-from src.arrangement.scoring import DIFFICULTY_KEYS, ScoringModel
+from src.common.examples import make_bar
+from src.common.inputs import bar_to_payload, parse_bar, prepare_input, request_from_pair
+from src.common.representation import to_tokens
+from src.beamsearch.scoring import DIFFICULTY_KEYS, ScoringModel
 from src.data.drum_difficulty_v2 import ATTRS
 
 

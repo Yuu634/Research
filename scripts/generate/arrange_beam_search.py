@@ -8,11 +8,11 @@ from pathlib import Path
 
 from scripts.evaluate.review_arrangement_inputs import read_request
 from scripts.evaluate.review_arrangement_rules import midi, svg
-from src.arrangement.beam_search import beam_search
-from src.arrangement.evaluation import evaluate_result
-from src.arrangement.inputs import prepare_input
-from src.arrangement.representation import to_tokens
-from src.arrangement.selected_model import load_selected_model
+from src.beamsearch.beam_search import beam_search
+from src.common.evaluation import evaluate_result
+from src.common.inputs import prepare_input
+from src.common.representation import to_tokens
+from src.beamsearch.selected_model import load_selected_model
 
 
 def main():
