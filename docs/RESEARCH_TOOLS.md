@@ -52,6 +52,11 @@ python -m scripts.evaluate.review_arrangement_rules
 `python -m scripts.evaluate.review_arrangement_scoring`で`output/beamsearch_step2/`へHTML・JSONを生成する。
 係数は初期値であり、モデル選定やBeamSearch本体は後続段階で実装する。
 
+ステップ3の`src/arrangement/inputs.py`は小節・前後文脈・目標・保護情報の検証と入力変換を担当する。
+[入力内容の確認資料](BEAMSEARCH_STEP3_REVIEW.md)に絶対値／差分の指定方法を記載した。
+`python -m scripts.evaluate.review_arrangement_inputs --examples`で入力例と確認HTMLを生成する。
+`--input`でJSON、`--pairdata`で生成済みペアを検証できる。探索は実行しない。
+
 難易度属性v2は[承認済み算出式](ATTRIBUTE_FORMULA_REVIEW.md)と[実装・ラベリング結果](ATTRIBUTE_V2_RESULTS.md)を参照。
 旧式・基準YAML・既存チェックポイントは維持し、新ラベルを別ディレクトリへ生成する。
 
