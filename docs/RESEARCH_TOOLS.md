@@ -39,7 +39,7 @@ bash tasks/analysis.sh trained_model/checkpoints_drum_standard-lakh1-kl14 traine
 ルールベースBeamSearchのステップ1は[編曲ルールの確認資料](BEAMSEARCH_STEP1_REVIEW.md)を参照。
 `src/arrangement/representation.py`は音符・奏法の保持、`rules.py`は65編集関数、
 `safety.py`は骨格保護・累積編集制限、`examples.py`は固定人工例を担当する。
-以下で変更前後図と試聴用MIDIを生成する。探索・モデル選定は段階確認後に実装する。
+以下で変更前後図と試聴用MIDIを生成する。探索・モデル選定は後述のステップ5のCLIを使う。
 
 ```bash
 python -m scripts.evaluate.review_arrangement_rules
@@ -50,7 +50,7 @@ python -m scripts.evaluate.review_arrangement_rules
 ステップ2の`src/arrangement/scoring.py`は難易度一致・骨格保持・ルール数・編集量の採点器。
 [探索スコアの確認資料](BEAMSEARCH_STEP2_REVIEW.md)に式・係数・固定例の内訳を記録した。
 `python -m scripts.evaluate.review_arrangement_scoring`で`output/beamsearch_step2/`へHTML・JSONを生成する。
-係数は初期値であり、モデル選定やBeamSearch本体は後続段階で実装する。
+係数は確認用の初期値。選定済み設定とBeamSearch本体は後述のステップ5を参照。
 
 ステップ3の`src/arrangement/inputs.py`は小節・前後文脈・目標・保護情報の検証と入力変換を担当する。
 [入力内容の確認資料](BEAMSEARCH_STEP3_REVIEW.md)に絶対値／差分の指定方法を記載した。
@@ -61,7 +61,22 @@ python -m scripts.evaluate.review_arrangement_rules
 無出力・違反も含む成功率と曲単位マクロ平均を計算する。
 [評価指標の確認資料](BEAMSEARCH_STEP4_REVIEW.md)に定義・閾値・分母・選定方針案を記載した。
 `python -m scripts.evaluate.review_arrangement_metrics --examples`で人工例のHTML・JSON・CSVを生成する。
-`--pairdata`で無編集と固定ルール列を診断できる。BeamSearch・モデル選定は後続段階。
+`--pairdata`で無編集と固定ルール列を診断できる。BeamSearch・モデル選定にはステップ5のCLIを使う。
+
+ステップ5の`src/arrangement/beam_search.py`は原譜の制約を保つBeamSearch本体。
+[比較実験・選定の確認資料](BEAMSEARCH_STEP5_REVIEW.md)に探索仕様と結果を記載する。
+`config/beamsearch_candidates.json`で探索幅・深さ・係数を比較し、
+`config/beamsearch_selected.json`を推論用の選定設定として使う。
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python -m scripts.evaluate.compare_arrangement_models --phase all --workers 24
+python -m scripts.evaluate.report_arrangement_comparison --export-model config/beamsearch_selected.json
+python -m scripts.generate.arrange_beam_search --input output/beamsearch_step3/absolute_request.json
+```
+
+比較CLIはval選定後にtest/itestを評価し、入力・設定・実装が一致する場合だけバッチ結果を再利用する。
+再検証CLIは選定モデルの全履歴を再生し、譜面・指標の一致を検査する。
+推論CLIはJSON・打点位置図・試聴用MIDIを出力する。人手による編曲品質評価は未実施。
 
 難易度属性v2は[承認済み算出式](ATTRIBUTE_FORMULA_REVIEW.md)と[実装・ラベリング結果](ATTRIBUTE_V2_RESULTS.md)を参照。
 旧式・基準YAML・既存チェックポイントは維持し、新ラベルを別ディレクトリへ生成する。
