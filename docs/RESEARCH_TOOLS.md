@@ -47,6 +47,11 @@ python -m scripts.evaluate.review_arrangement_rules
 
 出力は`output/beamsearch_step1/`。実運用の候補には`apply_rule`で安全制約を適用する。
 
+ステップ2の`src/arrangement/scoring.py`は難易度一致・骨格保持・ルール数・編集量の採点器。
+[探索スコアの確認資料](BEAMSEARCH_STEP2_REVIEW.md)に式・係数・固定例の内訳を記録した。
+`python -m scripts.evaluate.review_arrangement_scoring`で`output/beamsearch_step2/`へHTML・JSONを生成する。
+係数は初期値であり、モデル選定やBeamSearch本体は後続段階で実装する。
+
 難易度属性v2は[承認済み算出式](ATTRIBUTE_FORMULA_REVIEW.md)と[実装・ラベリング結果](ATTRIBUTE_V2_RESULTS.md)を参照。
 旧式・基準YAML・既存チェックポイントは維持し、新ラベルを別ディレクトリへ生成する。
 
