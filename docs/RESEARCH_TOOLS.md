@@ -57,6 +57,12 @@ python -m scripts.evaluate.review_arrangement_rules
 `python -m scripts.evaluate.review_arrangement_inputs --examples`で入力例と確認HTMLを生成する。
 `--input`でJSON、`--pairdata`で生成済みペアを検証できる。探索は実行しない。
 
+ステップ4の`src/arrangement/evaluation.py`は固定基準で目標到達・骨格保持・編集量を評価し、
+無出力・違反も含む成功率と曲単位マクロ平均を計算する。
+[評価指標の確認資料](BEAMSEARCH_STEP4_REVIEW.md)に定義・閾値・分母・選定方針案を記載した。
+`python -m scripts.evaluate.review_arrangement_metrics --examples`で人工例のHTML・JSON・CSVを生成する。
+`--pairdata`で無編集と固定ルール列を診断できる。BeamSearch・モデル選定は後続段階。
+
 難易度属性v2は[承認済み算出式](ATTRIBUTE_FORMULA_REVIEW.md)と[実装・ラベリング結果](ATTRIBUTE_V2_RESULTS.md)を参照。
 旧式・基準YAML・既存チェックポイントは維持し、新ラベルを別ディレクトリへ生成する。
 
