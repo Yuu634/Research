@@ -1,6 +1,8 @@
 __pycache__/
 
-.claude/worktrees/*
+/.claude/
+/.github/
+/.kiro/
 data/*/
 logs/*
 output/*
