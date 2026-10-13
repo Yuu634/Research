@@ -1,20 +1,18 @@
 import os
 import argparse
+from datasets import load_dataset
 from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--output_dir", default="data/raw/gigamidi")
-parser.add_argument('--cache_dir', default=None, help='Hugging Face キャッシュ先（省略時は標準設定）')
 args = parser.parse_args()
-
-from datasets import load_dataset
 
 SPLITS = ["train", "validation", "test"]
 OUTPUT_BASE = args.output_dir
 
 total_saved = 0
 for split in SPLITS:
-    dataset = load_dataset("Metacreation/GigaMIDI", "v2.0.0", split=split, cache_dir=args.cache_dir, keep_in_memory=True)
+    dataset = load_dataset("Metacreation/GigaMIDI", "v2.0.0", split=split, cache_dir="/mnt/kiso-qnap5/obara/hf_cache", keep_in_memory=True)
     filtered = dataset.filter(lambda x: x["NOMML_Instrument"] == ["Drums"], keep_in_memory=True)
     print(f"{split}: {len(dataset)} -> {len(filtered)} 件")
 

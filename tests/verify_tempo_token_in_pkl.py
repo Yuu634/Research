@@ -6,20 +6,19 @@
     python verify_tempo_token_in_pkl.py <midi_file> <output_pkl>
 
 例:
-    python tests/verify_tempo_token_in_pkl.py tests/test_token/sample_midis/simple_beat.mid output_test.pkl
+    python verify_tempo_token_in_pkl.py test_token/sample_midis/simple_beat.mid output_test.pkl
 """
 import sys
 import os
 import pickle
 import argparse
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.tokenizers.drum_tokenizer import DrumTokenizer
+from drum_tokenizer import DrumTokenizer
 
 
 def verify_tempo_tokens_in_pkl(midi_path: str, pkl_output_path: str, vocab_path: str = None):
     """
     MIDIをトークン化 → pkl化 → 検証
-
+    
     Args:
         midi_path: MIDIファイルパス
         pkl_output_path: 出力pkl ファイルパス
@@ -27,16 +26,16 @@ def verify_tempo_tokens_in_pkl(midi_path: str, pkl_output_path: str, vocab_path:
     """
     # トークナイザーを初期化
     tokenizer = DrumTokenizer()
-
+    
     # 語彙を保存（オプション）
     if vocab_path:
         tokenizer.save_vocab(vocab_path)
         print(f"✓ Vocabulary saved to: {vocab_path}")
-
+    
     print("\n" + "="*70)
     print("TEMPO TOKEN VERIFICATION")
     print("="*70)
-
+    
     # Step 1: MIDIをトークン化
     print(f"\n[Step 1] Converting MIDI → Tokens")
     print(f"  Input MIDI: {midi_path}")
@@ -48,7 +47,7 @@ def verify_tempo_tokens_in_pkl(midi_path: str, pkl_output_path: str, vocab_path:
     except Exception as e:
         print(f"  ✗ Error: {e}")
         return False
-
+    
     # Step 2: トークンをインデックス化
     print(f"\n[Step 2] Converting Tokens → Indices")
     try:
@@ -58,7 +57,7 @@ def verify_tempo_tokens_in_pkl(midi_path: str, pkl_output_path: str, vocab_path:
     except Exception as e:
         print(f"  ✗ Error: {e}")
         return False
-
+    
     # Step 3: pkl化
     print(f"\n[Step 3] Saving to PKL")
     print(f"  Output PKL: {pkl_output_path}")
@@ -71,7 +70,7 @@ def verify_tempo_tokens_in_pkl(midi_path: str, pkl_output_path: str, vocab_path:
     except Exception as e:
         print(f"  ✗ Error: {e}")
         return False
-
+    
     # Step 4: pkl から読み込み
     print(f"\n[Step 4] Loading from PKL")
     try:
@@ -83,19 +82,19 @@ def verify_tempo_tokens_in_pkl(midi_path: str, pkl_output_path: str, vocab_path:
     except Exception as e:
         print(f"  ✗ Error: {e}")
         return False
-
+    
     # Step 5: テンポトークン検証
     print(f"\n[Step 5] Verifying Tempo Tokens")
-
+    
     # テンポトークンをフィルタリング
     tempo_tokens = [t for t in tokens if t.startswith('<TEMPO_')]
     tempo_token_indices = [
         tokenizer.token2idx.get(t, -1) for t in tokens if t.startswith('<TEMPO_')
     ]
-
+    
     print(f"  ✓ Tempo tokens found: {len(tempo_tokens)}")
     print(f"    - Unique tempo values: {sorted(set(tempo_tokens))}")
-
+    
     # 詳細表示
     print(f"\n  Detailed token sequence (with tempo tokens):")
     in_bar = False
@@ -108,34 +107,34 @@ def verify_tempo_tokens_in_pkl(midi_path: str, pkl_output_path: str, vocab_path:
             if bar_count > 0 or i > 0:
                 print(f"  ...")
             print(f"\n    Bar {bar_count}: {token}")
-
+    
     # 検証チェック
     print(f"\n[Verification Checks]")
     checks = [
-        (len(tempo_tokens) == len(bar_positions),
+        (len(tempo_tokens) == len(bar_positions), 
          f"Tempo token count matches bar count: {len(tempo_tokens)} == {len(bar_positions)}"),
-        (len(tokens) == len(token_indices),
+        (len(tokens) == len(token_indices), 
          f"Token count matches index count: {len(tokens)} == {len(token_indices)}"),
-        (all(t in tokenizer.vocab for t in tokens),
+        (all(t in tokenizer.vocab for t in tokens), 
          f"All tokens in vocabulary"),
-        (all(idx >= 0 and idx < tokenizer.vocab_size for idx in token_indices),
+        (all(idx >= 0 and idx < tokenizer.vocab_size for idx in token_indices), 
          f"All indices are valid: 0-{tokenizer.vocab_size-1}"),
     ]
-
+    
     all_passed = True
     for passed, message in checks:
         status = "✓" if passed else "✗"
         print(f"  {status} {message}")
         if not passed:
             all_passed = False
-
+    
     print("\n" + "="*70)
     if all_passed:
         print("✓ ALL CHECKS PASSED - Tempo tokens are correctly integrated!")
     else:
         print("✗ SOME CHECKS FAILED - Please review the log above")
     print("="*70 + "\n")
-
+    
     return all_passed
 
 
@@ -157,19 +156,19 @@ def main():
         '--vocab',
         help='Optional: save vocabulary to this path'
     )
-
+    
     args = parser.parse_args()
-
+    
     if not os.path.exists(args.midi_file):
         print(f"Error: MIDI file not found: {args.midi_file}")
         return 1
-
+    
     success = verify_tempo_tokens_in_pkl(
         args.midi_file,
         args.output_pkl,
         args.vocab
     )
-
+    
     return 0 if success else 1
 
 

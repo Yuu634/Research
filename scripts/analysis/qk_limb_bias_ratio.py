@@ -19,7 +19,7 @@ Decoder は Causal マスク（下三角）内のペアのみを対象とする�
 
 使用方法:
   python -m scripts.analysis.qk_limb_bias_ratio \\
-    --model_dir trained_model/checkpoints_drum_standard-lakh1-kl14 \\
+    --model_dir trained_model/checkpoints_drum_standard-modelX \\
     --output_dir output/qk_limb_ratio/modelX \\
     [--checkpoint best_params.pt] \\
     [--sample_idx 0] \\
@@ -48,8 +48,8 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.data.drum_dataloader import DrumTransformerDataset
-from src.musemorphose.model import MuseMorphose
-from src.musemorphose.limb_bias import (
+from src.models.musemorphose import MuseMorphose
+from src.models.limb_bias import (
     build_token_to_limb_map, build_limb_ids, build_limb_bias_mask,
     make_limb_lookup_table,
 )
@@ -132,10 +132,6 @@ def _resolve_bias_params(mconf: dict, dset: DrumTransformerDataset) -> dict:
         alpha_pos_fixed=alpha_pos_fixed,
         position_bias_per_layer=position_bias_per_layer,
         pos_token_ids=pos_token_ids,
-        bias_schedule_encoder=mconf.get('bias_schedule_encoder', 'both'),
-        bias_schedule_decoder=mconf.get('bias_schedule_decoder', 'both'),
-        bias_schedule_encoder_custom=mconf.get('bias_schedule_encoder_custom'),
-        bias_schedule_decoder_custom=mconf.get('bias_schedule_decoder_custom'),
     )
 
 
@@ -547,9 +543,7 @@ def run(args) -> None:
     print(f'[info] vocab_size: {dset.vocab_size}  dataset size: {len(dset)}')
 
     loader = DataLoader(dset, batch_size=1, shuffle=False)
-    if sample_idx < 0 or sample_idx >= len(dset):
-        raise ValueError(f'sample_idx が範囲外です: {sample_idx} (件数: {len(dset)})')
-    batch = next(batch for i, batch in enumerate(loader) if i == sample_idx)
+    batch = next(iter(loader))
 
     # ── チェックポイントロード ───────────────────────────────────────────
     ckpt_path = os.path.join(model_dir, 'params', ckpt_name)

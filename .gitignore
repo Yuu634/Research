@@ -1,23 +1,12 @@
 __pycache__/
-*.py[cod]
-.pytest_cache/
-.venv/
 
-.claude/
+.claude/worktrees/*
 data/*/
-!data/pairdata/
-data/pairdata/*
-!data/pairdata/*.py
-!data/pairdata/*.md
-logs/
-output/
-trained_model/
+logs/*
+output/*
+trained_model/*
 
 **/*.tar.gz
 **/*.zip
 *.sh.e*
 *.sh.o*
-
-# 手動トークン検証で再生成する成果物
-tests/test_token/output/
-tests/test_token/sample_midis/

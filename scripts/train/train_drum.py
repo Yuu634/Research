@@ -6,8 +6,8 @@ import os
 import time
 import json
 
-from src.musemorphose.model import MuseMorphose
-from src.musemorphose.limb_bias import (
+from src.models.musemorphose import MuseMorphose
+from src.models.limb_bias import (
     build_token_to_limb_map,
     build_limb_ids,
     build_limb_pair_masks,
@@ -19,7 +19,7 @@ from src.musemorphose.limb_bias import (
     VALID_BIAS_SCHEDS,
     BIAS_MODE_NONE,
 )
-from src.musemorphose.position_bias import (
+from src.models.position_bias import (
     build_position_ids,
     build_position_pair_masks,
     compute_attn_pos_bias_loss,

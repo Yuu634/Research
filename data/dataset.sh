@@ -1,8 +1,108 @@
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")/.."
+#!/bin/bash
 
-# ダウンロード・展開済みの Lakh MIDI からドラムを抽出する。
-python -m data.cleaning_lakhmidi \
-    --lakhmidi_dir "${1:-data/raw/lmd_full}" \
-    --output_dir "${2:-data/filtered/lakhmidi}"
+# 作成するデータセット指定
+#(groove groove_full groove_augment lakh lakh_augment slakh2100 gigamidi)
+create_target=(
+    groove_augment
+)
+
+
+# create_target に指定した文字列と完全一致する要素があるかを判定する
+has_target() {
+    local target="$1"
+    local t
+    for t in "${create_target[@]}"; do
+        [[ "$t" == "$target" ]] && return 0
+    done
+    return 1
+}
+
+if has_target "lakh"; then
+    echo "Creating Lakh dataset..."
+    python data/cleaning_lakhmidi.py \
+      --lakhmidi_dir data/raw/lmd_full \
+      --output_dir data/filtered/lakhmidi
+fi
+
+if has_target "lakh_augment"; then
+    echo "Creating Lakh Augment dataset..."
+    python data/augment_drum_midi.py \
+      --input_dir  data/filtered/lakhmidi \
+      --output_dir data/filtered/lakh_augment \
+      --augment_hihat --augment_location \
+      --n_bpm_versions 1 --seed 42
+fi
+
+if has_target "slakh2100"; then
+    echo "Creating Slakh2100 dataset..."
+    # LakhMIDIDatasetダウンロード
+    if [ ! -f data/lmd_full.tar.gz ]; then
+        wget -P data http://hog.ee.columbia.edu/craffel/lmd/lmd_full.tar.gz
+    fi
+    if [ ! -d data/raw/lmd_full ]; then
+        tar -xzf data/lmd_full.tar.gz -C data/raw
+    fi
+
+    # LakhMIDIからslakhMIDIを抽出
+    if [ ! -d data/raw/slakh2100 ]; then
+        python data/extract_slakh_from_lmd.py \
+            --lmd_dir data/raw/lmd_full \
+            --output data/raw/slakh2100
+    fi
+    if [ ! -d data/filtered/slakh2100 ]; then
+        python data/cleaning_slakh.py \
+            --dataset_dir data/raw/slakh2100 \
+            --output_dir  data/filtered/slakh2100
+    fi
+fi
+
+if has_target "gigamidi"; then
+    echo "Creating GigaMIDI dataset..."
+    # GigaMIDIダウンロード
+    if [ ! -d data/raw/gigamidi ]; then
+        python data/download_gigamidi.py \
+            --output_dir data/raw/gigamidi
+    fi
+
+    if [ ! -d data/filtered/gigamidi ]; then
+        python data/cleaning_gigamidi.py \
+            --output_dir  data/filtered
+    fi
+fi
+
+if has_target "groove_augment"; then
+    echo "Creating Groove Augment dataset..."
+    # Groove MIDI Datasetをダウンロードしておく
+    if [ ! -d data/filtered/groove_augment ]; then
+        python data/cleaning_groove_full.py \
+            --groovefull_dir data/raw/e-gmd \
+            --output_dir data/filtered/groove_cleaning \
+            --dedup_id #重複idデータ削除
+        
+        python data/augment_drum_midi.py \
+        --input_dir data/filtered/groove_cleaning \
+        --output_dir data/filtered/groove_augment \
+        --augment_hihat --augment_location \
+        --n_bpm_versions 1 --seed 42
+    fi
+fi
+
+if has_target "groove_full"; then
+    echo "Creating Groove Full dataset..."
+    # Groove MIDI Datasetをダウンロードし解凍しておく
+    if [ ! -d data/filtered/groove_full ]; then
+        python data/cleaning_groove_full.py \
+            --groovefull_dir data/raw/e-gmd \
+            --output_dir data/filtered/groove_full
+    fi
+fi
+
+if has_target "groove"; then
+    echo "Creating Groove MIDI dataset..."
+    # Groove MIDI Datasetをダウンロードしておく
+    if [ ! -d data/filtered/groove ]; then
+        python data/groove_extract.py \
+            --groove_zip data/groove-v1.0.0.zip \
+            --output_dir data/filtered
+    fi
+fi

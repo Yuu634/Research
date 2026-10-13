@@ -1,13 +1,11 @@
-> モデル改良時の参考資料として保持しています。本文の旧実験設定名・配置は当時のものです。現行の実行方法は [研究用ツール](RESEARCH_TOOLS.md) と [README](../README.md) を参照してください。
-
 # 設計書: Attention Bias Loss への Position モード追加（`pos_over_other` / `other_over_pos`）
 
 作成日: 2026-07-08
 対象ブランチ: `data_revise`
 関連設計書: `docs/DESIGN_attn_bias_loss.md`（本機能の基盤）
 
-**修正対象ファイル: `scripts/train/train_drum.py`, `src/musemorphose/position_bias.py`, `config/*` のみ**
-（`src/musemorphose/limb_bias.py` / `src/musemorphose/model.py` / `src/musemorphose/transformer_encoder.py`
+**修正対象ファイル: `scripts/train/train_drum.py`, `src/models/position_bias.py`, `config/*` のみ**
+（`src/models/limb_bias.py` / `src/models/musemorphose.py` / `src/models/transformer_encoder.py`
 は**無改変**）
 
 ---
@@ -81,7 +79,7 @@ train_drum.py (_apply_bias_loss)
 
 ## 3. 変更内容
 
-### 3.1 `src/musemorphose/position_bias.py`（追加のみ・既存関数は無変更）
+### 3.1 `src/models/position_bias.py`（追加のみ・既存関数は無変更）
 
 #### (a) モード定数
 
@@ -211,7 +209,7 @@ if pt is not None:
 #### (e) import 追加（`train_drum.py` 冒頭）
 
 ```python
-from src.musemorphose.position_bias import (
+from src.models.position_bias import (
     build_position_ids, build_position_pair_masks,
     compute_attn_pos_bias_loss, POS_BIAS_MODES,
 )

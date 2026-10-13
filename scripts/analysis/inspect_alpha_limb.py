@@ -4,7 +4,7 @@ encoder.alpha_limb および decoder.alpha_limb の値を抽出してCSVと折�
 
 使用方法:
   python -m scripts.analysis.inspect_alpha_limb \
-    --model_dir trained_model/checkpoints_drum_standard-lakh1-kl14 \
+    --model_dir trained_model/checkpoints_drum_standard-model2 \
     --output_dir output/alpha_limb/model2
 """
 
@@ -60,8 +60,6 @@ def inspect(model_dir: str, output_dir: str) -> None:
          if f.endswith('.pt') and f not in _EXCLUDE],
         key=lambda f: (_parse_step(f), f),
     )
-    if not ckpt_files:
-        ckpt_files = sorted(f for f in _EXCLUDE if os.path.isfile(os.path.join(params_dir, f)))
     if not ckpt_files:
         raise FileNotFoundError(f'チェックポイント (.pt) が見つかりません: {params_dir}')
 

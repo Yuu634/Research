@@ -7,13 +7,13 @@ pklファイルに保存されたトークン列が、元のMIDI譜面の音符�
 """
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pickle
 import miditoolkit
 from typing import List, Dict, Tuple
 from collections import Counter
-from src.utils.drum_to_midi import cp_events_to_tokens
+from drum_to_midi import cp_events_to_tokens
 
 
 # 定数

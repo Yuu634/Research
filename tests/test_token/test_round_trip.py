@@ -14,8 +14,6 @@ MIDI → トークン → MIDIの往復変換テスト
 - 異なるticks_per_beatでも正しく比較できるように改善
 - より詳細な比較情報の表示
 """
-__test__ = False  # 手動 CLI。自動回帰テストは tests/test_integration_tokenization_pipeline.py。
-
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -840,9 +838,9 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='MIDI往復変換テスト')
-    parser.add_argument('--midi_dir', type=str, default='./tests/test_token/sample_midis',
+    parser.add_argument('--midi_dir', type=str, default='./test_token/sample_midis',
                         help='テスト用MIDIファイルのディレクトリ')
-    parser.add_argument('--output_dir', type=str, default='./tests/test_token/output',
+    parser.add_argument('--output_dir', type=str, default='./test_token/output',
                         help='出力ディレクトリ')
     parser.add_argument('--vocab_path', type=str, default=None,
                         help='語彙ファイルパス（オプション）')
@@ -867,7 +865,7 @@ def main():
         if not os.path.exists(args.midi_dir):
             print(f"✗ エラー: MIDIディレクトリが見つかりません: {args.midi_dir}")
             print(f"\n最初にサンプルMIDIファイルを生成してください:")
-            print(f"  python tests/test_token/sample_midi_generator.py")
+            print(f"  python test_token/sample_midi_generator.py")
             return 1
 
         midi_files = [

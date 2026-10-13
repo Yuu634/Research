@@ -335,7 +335,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='テスト用ドラムMIDIファイルを生成')
-    parser.add_argument('--output_dir', type=str, default='./tests/test_token/sample_midis',
+    parser.add_argument('--output_dir', type=str, default='./test_token/sample_midis',
                         help='出力ディレクトリ')
 
     args = parser.parse_args()

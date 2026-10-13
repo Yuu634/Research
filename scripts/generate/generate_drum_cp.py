@@ -22,7 +22,7 @@ import yaml
 from scipy.stats import entropy
 
 from src.data.drum_dataloader import DrumTransformerDataset
-from src.musemorphose.model import MuseMorphose
+from src.models.musemorphose import MuseMorphose
 from src.utils.utils import pickle_load, numpy_to_tensor, tensor_to_numpy
 from src.utils.drum_to_midi import cp_data_to_midi
 

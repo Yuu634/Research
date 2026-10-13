@@ -15,6 +15,7 @@ import io
 import os
 import sys
 import argparse
+from datasets import load_dataset
 from tqdm import tqdm
 import mido
 
@@ -60,7 +61,7 @@ def is_valid(midi_bytes: bytes, tpqn: int) -> bool:
         current_tick = 0
         for msg in track:
             current_tick += msg.time
-
+            
             # if msg.type == "set_tempo":
             #     tempo_count += 1
             #     if tempo_count > 1:
@@ -75,7 +76,6 @@ def is_valid(midi_bytes: bytes, tpqn: int) -> bool:
 
 def main():
     args = parse_args()
-    from datasets import load_dataset
 
     if args.output_dir == "debug":
         print("=== デバッグモード: validation の最初の3件を検査 ===")

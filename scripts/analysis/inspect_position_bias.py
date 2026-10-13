@@ -10,7 +10,7 @@ encoder.position_bias_module および decoder.position_bias_module の値を
 
 使用方法:
   python -m scripts.analysis.inspect_position_bias \
-    --model_dir trained_model/checkpoints_drum_standard-lakh1-kl14 \
+    --model_dir trained_model/checkpoints_drum_standard-model2 \
     --output_dir output/position_bias/model2
 """
 
@@ -104,8 +104,6 @@ def inspect(model_dir: str, output_dir: str) -> None:
          if f.endswith('.pt') and f not in _EXCLUDE],
         key=lambda f: (_parse_step(f), f),
     )
-    if not ckpt_files:
-        ckpt_files = sorted(f for f in _EXCLUDE if os.path.isfile(os.path.join(params_dir, f)))
     if not ckpt_files:
         raise FileNotFoundError(f'チェックポイント (.pt) が見つかりません: {params_dir}')
 

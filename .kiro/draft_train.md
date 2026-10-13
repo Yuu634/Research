@@ -1,0 +1,9 @@
+## 学習コード
+ドラム譜の難易度調整モデルとして精度良く機能するように学習するスクリプトへ修正する
+
+### REMI or ドラム譜特化型設計（standard）の学習
+Encoderで取得した潜在表現に各小節の難易度ラベルをConcatし、Decoderで再構成できるように学習するシステムを構築する
+
+### CPトークン対応時の学習
+`model-extension-multimode-hierarchical-pe`で構築したCPトークン時のモデル構造をそのまま活用するようにMuseMorphose学習システムを構築する
+そのため、学習の全体フローはREMIやstandardトークン時と基本的に変わりない
