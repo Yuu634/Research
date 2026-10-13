@@ -25,15 +25,26 @@ flowchart LR
 | 独立性 `s_indep` | 手足が異なるタイミングで動く割合 |
 | 手 `s_hand` | 手の最大打撃密度 |
 | 足 `s_foot` | 足の最大打撃密度 |
-| 移動 `s_move` | 楽器間の移動速度 |
+| 移動 `s_move` | 打点間の移動速度 |
 
 難易度は譜面から算出する指標です。指定どおりの生成や、実際の演奏のしやすさを保証するものではありません。
 
-## 研究で比較する要素
+## 基盤モデルからの差分（本研究で実装した部分）
 
-- **表現と条件付け**：standard・REMI・CPのトークン表現、小節ごとの難易度指定。
-- **Attentionの改良**：手足の関係と同時打点の関係を扱うバイアス・補助損失、その層別適用。
-- **生成と評価**：複数モデルのアンサンブル推論、難易度制御と原譜のリズム保持の評価。
+比較元は [MuseMorphoseの元実装（`0695702`）](https://github.com/YatingMusic/MuseMorphose/tree/069570279db65ffb3914ca9aacab8061badfacb3) です。
+**Transformer VAE、小節単位の潜在表現、`in-attn` / `pre-attn` 条件付けは元実装から継承**しています。
+その上に、ドラムの演奏難易度を扱うため、以下の機能を追加・改良しました。
+
+| 項目 | 元のMuseMorphose | 本研究で追加・改良した実装 |
+|---|---|---|
+| 譜面表現・前処理 | ピアノのREMIトークン列 | 楽器・奏法・強弱を表すドラム用standard、ドラム向けREMI、四肢ベースCPを実装。MIDI変換・語彙作成・データローダーを整備（[トークナイザー](src/tokenizers/)） |
+| 難易度条件 | リズム密度・同時発音数の2属性 | 演奏難易度5属性の算出・8クラス化・小節ラベル付与と、各属性の埋め込みによる条件付き生成を実装（[難易度計算](src/data/drum_difficulty_calculator.py)、[モデル](src/models/musemorphose.py)） |
+| Attentionバイアス | 通常のSelf-Attention | 同じ手足のグループを扱うLimb-Relation Biasと、同時打点を扱うPosition-Same-Time Biasを追加。適用する層も設定可能（[四肢](src/models/limb_bias.py)、[位置](src/models/position_bias.py)、[層別設定](src/models/bias_schedule.py)） |
+| 生成機能 | テスト曲を抽出し、2属性をシフトして生成 | 任意の入力MIDI、難易度の一括増減・上限・小節別指定に対応。複数モデルの次トークン確率を平均するアンサンブル推論も追加（[入力MIDI生成](scripts/generate/generate_drum_from_input.py)、[アンサンブル](scripts/generate/generate_drum_ensemble.py)） |
+
+これらは追加実装の範囲を示すもので、各機能の効果は設定ごとの比較実験で評価します。
+
+## 評価と基準設定
 
 評価では、指定難易度と生成譜面の難易度の相関、他属性への影響、Groove Similarity、Token IoUを確認します。
 基準設定は [drum_config_standard-lakh1-kl14.yaml](config/drum_config_standard-lakh1-kl14.yaml) です。
