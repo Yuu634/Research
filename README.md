@@ -1,133 +1,95 @@
-# MuseMorphose
+# Drum MuseMorphose：演奏難易度を調整するドラム譜生成
 
-This repository contains the official implementation of the following paper:  
+**元のリズムの特徴を保ちながら、演奏者に合わせて難易度を調整するドラム自動編曲**を目指す研究です。
+ピアノ向け音楽生成モデル MuseMorphose をドラムに拡張し、入力MIDIから「手の連打を減らす」「足の負荷を下げる」といった条件に沿う譜面を生成します。
 
-* Shih-Lun Wu, Yi-Hsuan Yang  
-**_MuseMorphose_: Full-Song and Fine-Grained Piano Music Style Transfer with One Transformer VAE**  
-accepted to _IEEE/ACM Trans. Audio, Speech, & Language Processing (TASLP)_, Dec 2022 [<a href="https://arxiv.org/abs/2105.04090" target="_blank">arXiv</a>] [<a href="https://slseanwu.github.io/site-musemorphose/" target="_blank">demo website</a>]
+## 手法
 
-## Prerequisites
-* Python >= 3.6
-* Install dependencies
-```bash
-pip3 install -r requirements.txt
-```
-* GPU with >6GB RAM (optional, but recommended)
+Transformer VAE（変分オートエンコーダ）で入力譜面を小節ごとの潜在表現に変換し、指定した難易度を条件にトークン列を生成してMIDIへ戻します。
 
-## Preprocessing
-```bash
-# download REMI-pop-1.7K dataset
-wget -O remi_dataset.tar.gz https://zenodo.org/record/4782721/files/remi_dataset.tar.gz?download=1
-tar xzvf remi_dataset.tar.gz
-rm remi_dataset.tar.gz
-
-# compute attributes classes
-python3 attributes.py
+```mermaid
+flowchart LR
+    A[入力ドラムMIDI] --> B[トークン化]
+    B --> C[Encoder：小節の潜在表現]
+    C --> D[Decoder：条件付き生成]
+    E[小節ごとの目標難易度] --> D
+    D --> F[生成ドラムMIDI]
 ```
 
-## Training
-```bash
-python3 train.py [config file]
-```
-* e.g.
-```bash
-python3 train.py config/default.yaml
-```
-* Or, you may download the pretrained weights straight away
-```bash
-wget -O musemorphose_pretrained_weights.pt https://zenodo.org/record/5119525/files/musemorphose_pretrained_weights.pt?download=1
-```
+ドラムの表現には、小節・拍・打点位置・テンポと、楽器・奏法・強弱のトークンを使います。
+難易度は次の5属性をそれぞれ8クラス（0〜7）に分けて指定します。
 
-## Generation
-```bash
-python3 generate.py [config file] [ckpt path] [output dir] [num pieces] [num samples per piece]
-```
-* e.g.
-```bash
-python3 generate.py config/default.yaml musemorphose_pretrained_weights.pt generations/ 10 5
-```
+| 属性 | 表す内容 |
+|---|---|
+| 技術 `s_tech` | 特殊奏法の頻度 |
+| 独立性 `s_indep` | 手足が異なるタイミングで動く割合 |
+| 手 `s_hand` | 手の最大打撃密度 |
+| 足 `s_foot` | 足の最大打撃密度 |
+| 移動 `s_move` | 楽器間の移動速度 |
 
-This script will randomly draw the specified # of pieces from the test set.  
-For each sample of a piece, the _rhythmic intensity_ and _polyphonicity_ will be shifted entirely and randomly by \[-3, 3\] classes for the model to generate style-transferred music.  
-You may modify `random_shift_attr_cls()` in `generate.py` or write your own function to set the attributes.
+難易度は譜面から算出する指標です。指定どおりの生成や、実際の演奏のしやすさを保証するものではありません。
 
-## Customized Generation (To Be Added)
-We welcome the community's suggestions and contributions for an interface on which users may
- * upload their own MIDIs, and 
- * set their desired bar-level attributes easily
+## 研究で比較する要素
 
-## Drum Workflow: Data Preparation, Token Design, and Training
+- **表現と条件付け**：standard・REMI・CPのトークン表現、小節ごとの難易度指定。
+- **Attentionの改良**：手足の関係と同時打点の関係を扱うバイアス・補助損失、その層別適用。
+- **生成と評価**：複数モデルのアンサンブル推論、難易度制御と原譜のリズム保持の評価。
 
-This repository also includes a drum-specific pipeline that tokenizes drum MIDI files with explicit playing-technique tokens (e.g., flam, rimshot, choke) and trains MuseMorphose from scratch on that representation.
+評価では、指定難易度と生成譜面の難易度の相関、他属性への影響、Groove Similarity、Token IoUを確認します。
+基準設定は [drum_config_standard-lakh1-kl14.yaml](config/drum_config_standard-lakh1-kl14.yaml) です。
+standard表現と5属性の条件付けを使い、Limb Bias・Position Bias・階層位置埋め込みは無効です。
 
-### 1. Install Drum Dependencies
-```bash
-pip3 install -r requirements_drum.txt
-```
+## 実行方法
 
-### 2. Prepare Drum Dataset from MIDI
-Run the dataset preparation script to:
-1. build and save a drum vocabulary (`drum_vocab.pkl`),
-2. tokenize all MIDI files,
-3. save tokenized samples as `*.pkl`, and
-4. create `train_split.pkl` / `val_split.pkl`.
+リポジトリ直下で実行します。以下の複数行コマンドはBash形式です。
+Python環境にドラム用の依存を導入し、CUDAを使う場合は環境に適合するPyTorchを用意してください。
 
 ```bash
-python3 prepare_drum_dataset.py \
-    --midi_dir ./drum_dataset \
-    --output_dir ./drum_prepare \
-    --vocab_path ./drum_vocab.pkl \
-    --train_ratio 0.9 \
-    --seed 42 \
-    --file_extension .midi
+python -m pip install -r requirements_drum.txt
 ```
 
-If your files use `.mid`, set `--file_extension .mid`.
+**データ準備**：MIDIのトークン化 → 難易度境界の計算 → 小節ラベルの付与を行い、基準YAMLのデータ・語彙パスに配置します。
+処理例は [tasks/data_creator.sh](tasks/data_creator.sh) にあります。既定では拡張データ用の `standard-lakhaug` に出力するため、入力・出力先を使用する設定に合わせてください。
 
-### 3. Drum Token Design (What the Script Produces)
-The tokenizer (`drum_tokenizer.py`) uses:
-1. Structural tokens: `<BAR>`, `<BEAT_1>` ... `<BEAT_4>`, `<POS_0>` ... `<POS_23>`, `<EOS>`, `<PAD>`
-2. Performance tokens: `[INSTRUMENT]_[TECHNIQUE]_[VELOCITY_LEVEL]` (e.g., `SNARE_HIT_Normal`, `SNARE_FLAM_Accent`, `CRASH_CHOKE`)
-3. Velocity levels: `Ghost`, `Normal`, `Accent`
+**学習**：基準設定を明示して実行します。
 
-Each prepared sample `drum_prepare/xxxxxx.pkl` is saved as:
-```python
-(bar_positions, token_indices)
-```
-where:
-1. `bar_positions` stores token start indices per bar,
-2. `token_indices` is the token-id sequence for training.
-
-### 4. Configure Drum Training
-Edit `config/drum_config.yaml` as needed:
-1. `data.data_dir: './drum_prepare'`
-2. `data.vocab_path: './drum_vocab.pkl'`
-3. `data.train_split: './drum_prepare/train_split.pkl'`
-4. `data.val_split: './drum_prepare/val_split.pkl'`
-5. `training.device: 'cpu'` or `'cuda'`
-
-### 5. Start Training
 ```bash
-python3 train_drum.py --config config/drum_config.yaml
+python -m scripts.train.train_drum --config config/drum_config_standard-lakh1-kl14.yaml
 ```
 
-Or run the CPU quick-start helper:
+**生成**：学習済み重み、その実験の `config.yaml`、語彙、難易度境界ファイルが必要です。
+このブランチの生成CLIは境界を `data/metadata/difficulty_bounds_standard.pkl` から読むため、学習時と同じ境界ファイルをその場所に用意してください。
+
 ```bash
-bash quickstart_cpu.sh
+# 技術・独立性・手・足・移動の順に指定。手を1クラス下げる目標の例
+python -m scripts.generate.generate_drum_from_input \
+    --model_path trained_model/checkpoints_drum_standard-lakh1-kl14/params/best_params.pt \
+    --input_midi input.mid --output_midi output/generated.mid \
+    --difficulty_mode global_shift --difficulty_shift 0 0 -1 0 0
 ```
 
-### 6. Outputs
-Training checkpoints and logs are written to `checkpoints_drum/` (or your configured `ckpt_dir`):
-1. `params/`: model checkpoints,
-2. `optim/`: optimizer states,
-3. `log.txt`: training log,
-4. `valloss.txt`: validation log.
+難易度は一括増減（`global_shift`）、上限指定（`upper_cap`）、小節ごとの指定（`full_assign`）に対応します。
+引数の詳細は各CLIの `--help` で確認できます。
 
-For more details, see `README_drum.md`.
+## コードと資料
 
-## Citation BibTex
-If you find this work helpful and use our code in your research, please kindly cite our paper:
-```
+| 場所 | 内容 |
+|---|---|
+| `src/models/` | VAE・Transformer・Attentionバイアス |
+| `src/data/`・`src/tokenizers/` | データローダー・難易度計算・トークン化 |
+| `scripts/` | 前処理・学習・生成・評価・解析のCLI |
+| `config/`・`tasks/` | 実験設定と実行スクリプト |
+| `tests/` | トークン変換・データ整合性・モデルの検証 |
+
+詳細は [ドラム表現](docs/README_drum.md)、[難易度指標](docs/DIFFICULTY_README.md)、[四肢別Attention損失](docs/DESIGN_attn_bias_loss.md)、[位置別Attention損失](docs/DESIGN_attn_pos_bias_loss.md) を参照してください。
+資料には旧パスの実行例も含まれるため、実行時は `python -m scripts...` と各CLIの `--help` を使用してください。
+
+## 元実装と引用
+
+本研究は Shih-Lun Wu、Yi-Hsuan Yang による MuseMorphose の実装を基にしたドラム拡張です。
+ライセンスは [LICENSE](LICENSE) を参照してください。
+
+```bibtex
 @article{wu2023musemorphose,
     title={{MuseMorphose}: Full-Song and Fine-Grained Piano Music Style Transfer with One {Transformer VAE}},
     author={Shih-Lun Wu and Yi-Hsuan Yang},
