@@ -31,6 +31,11 @@
 したがってこの単体比較は新規学習する連続条件付きVAEであり、既存学習済みMuseMorphoseの
 再現評価ではない。既存モデルと重みを使うCLIは保持している。
 
+単体のみを実行する場合は`config/musemorphose_candidates.json`を使用する。
+候補集合は単体のみ・ハイブリッドのみ・両方を受け付ける。`smoke`も指定された方式だけで実行する。
+単体のみの新規準備ではBeamSearch探索を省略し、評価レポートにも単体の結果だけを載せる。
+実行例とキャッシュの区別は[再構成ペアを使う単体学習](PAIRDATA_RECONSTRUCTION.md)を参照。
+
 Encoder/Decoder各6層・8head・幅512・FFN2048・潜在512という基準YAMLの主要寸法を引き継ぐ。
 新設定では条件幅128、10epoch、batch 8、seed 42を初期値とする。
 中間譜面が追加音を含み得るため1小節512トークンを共通上限とし、上限超過は切り詰めず除外する。
@@ -41,6 +46,35 @@ seed・補助損失の頻度と件数をJSONで比較できる。
 ## 実行
 
 リポジトリ直下で実行する。成果物はGit対象外の`output/`以下へ保存する。
+
+入力先は`config/beam_muse_candidates.json`の2項目で指定する。
+
+```json
+"data": {
+  "pairdata": "data/processed/drum_pairdata_v1+reconst",
+  "beam_model": "config/beamsearch_selected.json"
+}
+```
+
+`pairdata`内の`drum_vocab.pkl`と`bounds.json`を使用するため、外部メタデータのパスは不要。
+BeamSearch選定時の語彙・境界のハッシュと一致しなければ学習開始前に停止する。
+`data`の相対パスとCLIの入力パスはリポジトリ直下基準。CLIの`--pairdata`・`--beam-model`は
+configより優先し、実際に使用した絶対パスを`run.json`の`identity.config.data`に保存する。
+キャッシュmanifestにも`resolved_paths`を保存し、元索引・語彙・境界・選定モデルのハッシュを照合する。
+`select`・`test`でも指定pairdataの索引とキャッシュの来歴を比較し、取り違えを拒否する。
+
+`data`のない旧configは従来の`drum_pairdata_v1`と選定モデルを既定値として使用する。
+旧CLIの`--meta`も利用できるが、指定ファイルはpairdata内の語彙・境界と完全一致する必要がある。
+現在の既定configはtrainに再構成を追加したデータを使用する。通常ペアとの比較では
+configの`data.pairdata`を変更するか、`--pairdata data/processed/drum_pairdata_v1`を指定する。
+設定・入力変更時は新しい出力先とキャッシュを使い、`prepare`→`select`→`test`の順で実行する。
+
+入力設定対応時の検証では、configだけを指定したtrain/val各4件のsmokeと、
+trainを編曲2件＋再構成2件にしたsmokeで、3候補の1epoch学習・val選定を確認した。
+前者の全重みは同じ入力を使った変更前の結果と一致し、旧checkpointの復元も確認した。
+この入力解決変更はモデル計算を変えないため、来歴ハッシュの対応表に検証済みの組だけを追加した。
+設定解決・CLI優先順位・メタデータ不一致・キャッシュ取り違えの12テストを追加し、
+全体は370件成功・従来と同じ5件失敗。小規模生成の適格率は0%で、本規模の性能検証ではない。
 
 ```bash
 # 小規模な接続確認。CPUでも実行可能。本評価とは出力先を分ける

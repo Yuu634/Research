@@ -16,7 +16,10 @@ from src.beamsearch.beam_search import SearchConfig, beam_search, standard_actio
 from src.common.evaluation import EvaluationConfig, evaluate_result, summarize_results
 from src.common.inputs import prepare_input, request_from_pair
 from src.beamsearch.scoring import ScoreConfig, ScoringModel
-from src.common.provenance import implementation_files
+from src.common.provenance import implementation_files, validate_sources
+from src.common.metrics import onset_similarities
+from src.common.loss_logging import MetricMeans, TrialLossLog, append_loss
+from src.common.representation import Bar, Note
 
 WORKER = {}
 SOURCE_FILES = implementation_files('beamsearch')
@@ -58,6 +61,9 @@ def initialize(meta, input_path, evaluation):
 def run_batch(method, start, end, path):
     model = ScoringModel(WORKER['bounds'], WORKER['vocabulary'], ScoreConfig(**method.get('score', {})))
     rows = []
+    log_path = Path(path).with_suffix('.loss.log')
+    temporary_log = log_path.with_suffix('.tmp')
+    temporary_log.write_text('', encoding='utf-8')
     for item in WORKER['inputs'][start:end]:
         prepared = item['prepared']
         started = perf_counter()
@@ -75,10 +81,88 @@ def run_batch(method, start, end, path):
                               rule_count=count, elapsed_seconds=elapsed, config=WORKER['evaluation'])
         row.update(history=history, search_statistics=statistics, candidate=asdict(candidate))
         rows.append(row)
+        score = (model.score(prepared.original, candidate, prepared.target, previous=prepared.previous,
+                             guards=prepared.guards, rule_count=count) if method.get('control') else result.score)
+        append_loss(temporary_log, dict(phase=Path(path).parent.parent.name, event='beamsearch_score',
+                    case_id=item['case_id'], source='selected_result', musemorphose=None, beamsearch=asdict(score)))
+    temporary_log.replace(log_path)
     write_pickle(path, rows)
     receipt = dict(method=method['name'], start=start, end=end, n=len(rows), sha256=file_hash(path))
     write_json(Path(path).with_suffix('.json'), receipt)
     return receipt
+
+
+def restore_candidate(saved):
+    return Bar(notes=tuple(Note(**n) for n in saved['notes']), bpm=saved['bpm'],
+               meter=tuple(saved['meter']), length=saved['length'],
+               fill_regions=tuple(tuple(r) for r in saved['fill_regions'])).validate()
+
+
+def read_evaluation_batch(path, inputs=None):
+    """旧バッチの発音類似度を原譜と保存済み候補から補完する。探索は再実行しない。"""
+    rows = read_pickle(path)
+    for row in rows:
+        if row['status'] == 'valid' and not {'rhythm_similarity', 'hihat_similarity'} <= row['metrics'].keys():
+            if inputs is None:
+                inputs = {item['case_id']: item['prepared']
+                          for item in read_pickle(Path(path).parent.parent/'inputs.pkl.gz')}
+            row['metrics'].update(onset_similarities(inputs[row['case_id']].original,
+                                                     restore_candidate(row['candidate'])))
+    return rows, inputs
+
+
+def save_model_logs(args, method, config):
+    """評価を分割ごとに1行へ集約する。既存バッチは採用譜面だけを再採点する。"""
+    directory = args.output/method['name']
+    log_interval = getattr(args, 'log_interval', 1)
+    log = TrialLossLog(directory, dict(method=method,
+        score=asdict(ScoreConfig(**method.get('score', {}))),
+        search=None if method.get('control') else asdict(SearchConfig(**method['search'])),
+        evaluation=config['evaluation'], action_set=config['action_set'],
+        pairdata=str(args.pairdata), meta=str(args.meta),
+        logging=dict(format='JSON Lines', log_interval=log_interval,
+                     beamsearch='評価分割ごとに全採用結果の数値項目を平均',
+                     training='勾配学習なし。smoke時は入力1件を1 Stepとして間引く')),
+        reset=True, log_interval=log_interval)
+    for split in ('train', 'val', 'test', 'itest'):
+        folder = args.output/split/method['name']
+        inputs = None
+        model = None
+        means, count, rows = MetricMeans(), 0, []
+        for path in sorted(folder.glob('batch_*.pkl.gz')):
+            batch_rows, inputs = read_evaluation_batch(path, inputs)
+            if split != 'train':
+                rows.extend(batch_rows)
+            log_path = path.with_suffix('.loss.log')
+            if not log_path.exists():
+                if inputs is None:
+                    inputs = {item['case_id']: item['prepared'] for item in read_pickle(args.output/split/'inputs.pkl.gz')}
+                if model is None:
+                    vocab = pickle.loads((args.meta/'drum_vocab.pkl').read_bytes())
+                    model = ScoringModel(json.loads((args.meta/'bounds.json').read_text())['boundaries'],
+                                         vocab['token2idx'], ScoreConfig(**method.get('score', {})))
+                temporary_log = log_path.with_suffix('.tmp')
+                temporary_log.write_text('', encoding='utf-8')
+                for row in batch_rows:
+                    prepared = inputs[row['case_id']]
+                    candidate = restore_candidate(row['candidate'])
+                    score = model.score(prepared.original, candidate, prepared.target, previous=prepared.previous,
+                                        guards=prepared.guards, rule_count=len(row['history']))
+                    append_loss(temporary_log, dict(phase=split, event='beamsearch_score', case_id=row['case_id'],
+                                source='saved_final_candidate', musemorphose=None, beamsearch=asdict(score)))
+                temporary_log.replace(log_path)
+            with log_path.open(encoding='utf-8') as stream:
+                for line in stream:
+                    record = json.loads(line)
+                    count += 1
+                    if split == 'train':
+                        log.write(**(record | dict(step=count)))
+                    else:
+                        means.add(record['beamsearch'])
+        if split != 'train' and count:
+            log.write(split, event='evaluation_summary', n=count, musemorphose=None,
+                      beamsearch=means.means(), evaluation=summarize_results(rows))
+    log.plot()
 
 
 def prepare_split(args, split, model, vocab, limit):
@@ -151,11 +235,14 @@ def evaluate_split(args, split, methods, config, model, vocab, limit=None):
     summaries = {}
     for method in methods:
         rows = []
+        inputs = None
         for start in range(0, n, args.batch_size):
-            rows.extend(read_pickle(directory/method['name']/f'batch_{start:06d}.pkl.gz'))
+            batch_rows, inputs = read_evaluation_batch(directory/method['name']/f'batch_{start:06d}.pkl.gz', inputs)
+            rows.extend(batch_rows)
         if [r['case_id'] for r in rows] != [r['case_id'] for r in manifest['inputs']]:
             raise ValueError('集計対象が共通入力集合と一致しない')
         summaries[method['name']] = summarize_results(rows)
+        save_model_logs(args, method, config)
     write_json(directory/'summaries.json', summaries)
     return summaries
 
@@ -177,11 +264,15 @@ def main():
     parser.add_argument('--output', type=Path, default=Path('output/beamsearch_step5'))
     parser.add_argument('--workers', type=int, default=24)
     parser.add_argument('--batch-size', type=int, default=8)
+    parser.add_argument('--log-interval', type=int, default=500,
+                        help='smoke時のtrain_loss保存間隔（入力件数、正整数、既定500）。評価は分割ごとに1行')
     parser.add_argument('--limit', type=int, default=16, help='smokeのtrain件数のみ。本評価では全件使用')
     args = parser.parse_args()
     try:
         if min(args.workers, args.batch_size, args.limit) < 1:
             raise ValueError('件数・並列数・バッチサイズは正整数')
+        if args.log_interval < 1:
+            raise ValueError('log-intervalは正整数')
         config = load_candidates(args.config)
         args.output.mkdir(parents=True, exist_ok=True)
         vocab = pickle.loads((args.meta/'drum_vocab.pkl').read_bytes())
@@ -199,9 +290,16 @@ def main():
                        actions=[action.as_dict() for action in standard_actions()],
                        smoke_limit=args.limit if args.phase == 'smoke' else None)
         receipt_path = args.output/'run_manifest.json'
-        if receipt_path.exists() and json.loads(receipt_path.read_text()) != receipt:
-            raise ValueError('実装・設定・入力が以前の実行と異なる。別の出力先を指定してください')
-        write_json(receipt_path, receipt)
+        if receipt_path.exists():
+            previous = json.loads(receipt_path.read_text())
+            if previous != receipt:
+                if args.phase != 'test' or {k: v for k, v in previous.items() if k != 'sources'} != {
+                        k: v for k, v in receipt.items() if k != 'sources'}:
+                    raise ValueError('実装・設定・入力が以前の実行と異なる。別の出力先を指定してください')
+                validate_sources(previous['sources'], receipt['sources'])
+                receipt = previous
+        else:
+            write_json(receipt_path, receipt)
         methods = CONTROLS+config['candidates']
         if args.phase == 'smoke':
             evaluate_split(args, 'train', methods, config, model, vocab, args.limit)

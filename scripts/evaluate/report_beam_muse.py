@@ -45,7 +45,8 @@ def report(run):
             summaries = json.loads(path.read_text())
             parts.append('<h2>'+split+'</h2><table>'+header+''.join(row(k,v) for k,v in summaries.items())+'</table>')
     smoke = record['identity']['smoke']
-    title = '接続確認用smoke実験（性能比較ではありません）' if smoke else '3方式の比較実験'
+    title = ('接続確認用smoke実験（性能比較ではありません）' if smoke else
+             ('MuseMorphose単体の実験' if set(selected['winners']) == {'musemorphose'} else 'モデル比較実験'))
     output = run/'review.html'
     output.write_text('<!doctype html><html lang="ja"><meta charset="utf-8"><title>'+title+'</title>'
                      '<style>body{font:16px sans-serif;margin:24px}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:8px}'

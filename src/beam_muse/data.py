@@ -36,7 +36,7 @@ def load_metadata(meta, selected_model):
     return scorer, search, actions, evaluation, selected, vocabulary
 
 
-def prepare_example(pair, vocabulary, scorer, search, actions, max_tokens):
+def prepare_example(pair, vocabulary, scorer, search, actions, max_tokens, *, use_beam=True):
     request = request_from_pair(pair, vocabulary['idx2token'])
     prepared = prepare_input(request, scorer)
     teacher = parse_bar(dict(tokens=[vocabulary['idx2token'][int(i)] for i in pair['X_after']],
@@ -47,12 +47,15 @@ def prepare_example(pair, vocabulary, scorer, search, actions, max_tokens):
     actual = scorer.difficulty(teacher, prepared.previous).normalized
     if any(abs(actual[k]-prepared.target[k]) > 1e-6 for k in actual):
         raise ValueError('教師譜面の難易度が目標と不一致')
-    result = beam_search(prepared, scorer, search, actions)
-    bars = (prepared.previous, prepared.original, result.candidate, prepared.following, teacher)
+    intermediate, history, beam_seconds = prepared.original, [], 0.
+    if use_beam:
+        result = beam_search(prepared, scorer, search, actions)
+        intermediate, history, beam_seconds = result.candidate, [a.as_dict() for a in result.history], result.elapsed_seconds
+    bars = (prepared.previous, prepared.original, intermediate, prepared.following, teacher)
     if any(len(to_tokens(bar)) > max_tokens for bar in bars if bar is not None):
         raise ValueError('トークン上限超過（自動切り詰めなし）')
     return Example(pair['pair_id'], pair['source']['dataset']+':'+pair['source']['id'], pair['source']['split'],
-                   prepared, result.candidate, teacher, [a.as_dict() for a in result.history], result.elapsed_seconds)
+                   prepared, intermediate, teacher, history, beam_seconds)
 
 
 def collate(examples, vocabulary, scorer, variant, device='cpu', *, training=True):
@@ -90,10 +93,12 @@ def source_hashes():
     return implementation_hashes('beam_muse')
 
 
-def prepare_cache(pairdata, meta, selected_model, output, *, max_tokens=512, smoke_limit=None):
+def prepare_cache(pairdata, meta, selected_model, output, *, max_tokens=512, smoke_limit=None, use_beam=True):
     output, pairdata = Path(output), Path(pairdata)
     if max_tokens < 4 or (smoke_limit is not None and smoke_limit < 1):
         raise ValueError('上限が不正')
+    if type(use_beam) is not bool:
+        raise ValueError('use_beamはbool')
     scorer, search, actions, _, _, vocabulary = load_metadata(meta, selected_model)
     index = json.loads((pairdata/'index.json').read_text())
     for shard in index['shards']:
@@ -102,6 +107,8 @@ def prepare_cache(pairdata, meta, selected_model, output, *, max_tokens=512, smo
     identity = dict(schema_version=1, pair_index=file_hash(pairdata/'index.json'),
                     vocabulary=file_hash(Path(meta)/'drum_vocab.pkl'), bounds=file_hash(Path(meta)/'bounds.json'),
                     beam_model=file_hash(selected_model), max_tokens=max_tokens, smoke_limit=smoke_limit, sources=source_hashes())
+    if not use_beam:
+        identity['intermediate_mode'] = 'original'
     output.mkdir(parents=True, exist_ok=True)
     manifest_path = output/'manifest.json'
     if manifest_path.exists():
@@ -126,7 +133,7 @@ def prepare_cache(pairdata, meta, selected_model, output, *, max_tokens=512, smo
                 raise ValueError('分割をまたぐ曲・重複ペア・分割名の不一致')
             seen_ids.add(pair['pair_id'])
             try:
-                rows.append(prepare_example(pair, vocabulary, scorer, search, actions, max_tokens))
+                rows.append(prepare_example(pair, vocabulary, scorer, search, actions, max_tokens, use_beam=use_beam))
             except ValueError as error:
                 excluded.append(dict(case_id=pair['pair_id'], reason=str(error)))
             if (len(rows)+len(excluded)) % 100 == 0:
@@ -137,7 +144,9 @@ def prepare_cache(pairdata, meta, selected_model, output, *, max_tokens=512, smo
         write_pickle(path, rows)
         summaries[split] = dict(n=len(rows), excluded=excluded, sha256=file_hash(path))
         print(f'{split}: {len(rows)}件を保存、除外{len(excluded)}件', flush=True)
-    manifest = dict(identity=identity, splits=summaries)
+    manifest = dict(identity=identity, splits=summaries,
+                    resolved_paths=dict(pairdata=str(pairdata.resolve()), meta=str(Path(meta).resolve()),
+                                        beam_model=str(Path(selected_model).resolve())))
     write_json(manifest_path, manifest)
     return manifest
 

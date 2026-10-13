@@ -36,6 +36,107 @@ bash tasks/analysis.sh trained_model/checkpoints_drum_standard-lakh1-kl14 traine
 
 ## 学習・評価の比較
 
+### test / itest の属性制御・発音類似度
+
+ニューラル方式の `test_comparison.json` / `itest_comparison.json`、BeamSearch単体の
+`test/summaries.json` / `itest/summaries.json` に、方式ごとに以下の項目を保存します。
+`eval_loss.log` の各評価行の `evaluation` にも同じ集計を記録します。
+共通の評価処理を使うためvalにも出力しますが、従来の候補・エポック選定基準は変更しません。
+
+| JSONキー | 定義と保存内容 |
+| --- | --- |
+| `attribute_spearman` | 5属性それぞれの指定目標と生成難易度の順位相関。`coefficient`、有効件数 `n`、算出不能理由 `reason` |
+| `attribute_label_distance` | 属性ごとの `abs(7 × 正規化目標 − 生成ラベル)` の平均 `mean` と有効小節数 `n` |
+| `label_distance` | 各小節で5属性のラベル距離を等重みで平均し、さらに小節間で平均した `mean` と有効小節数 `n` |
+| `rhythm_similarity` | ハイハット3種以外の `(楽器, 発音位置)` 集合を原譜と比較したF1の小節平均 `mean` と有効小節数 `n` |
+| `hihat_similarity` | オープン・クローズ・ペダルハイハットを統合した発音位置集合を原譜と比較したF1の小節平均 `mean` と有効小節数 `n` |
+
+発音F1は `2 × 共通イベント数 / (原譜のイベント数 + 生成譜面のイベント数)`。
+96位置グリッド上の完全一致を使い、無音位置・強弱・奏法・音符IDは一致数に含めません。
+両方の集合が空なら `null` として平均から除外し、片方だけ空なら0です。
+入力ごとの評価結果の `metrics` にも `rhythm_similarity` / `hihat_similarity` を保存します。
+既存のBeamSearchバッチは原譜と保存済み候補から類似度を補完して集計し、バッチ本体を変更しません。
+
+Spearmanは同順位を平均順位として扱い、2件未満なら `insufficient_samples`、
+目標が一定なら `constant_target`、生成値が一定なら `constant_generated` を理由として係数を `null` にします。
+属性を混ぜて1本の相関を求めることはしません。相対指定も解決後の絶対目標を比較します。
+ラベル尺度は0〜7で、離散ラベルに一致しない連続目標も丸めずに距離を算出します。
+いずれも適格出力が対象です。失敗・制約違反は既存の `status_counts` / `valid_rate` に残り、
+新指標の平均に成功値として混ぜません。旧結果で類似度が未記録なら欠測値として扱います。
+
+既存の学習結果に追加する場合は、学習時と同じ設定・device・出力先で
+`python -m scripts.train.tune_beam_muse --phase test ...` を実行します。
+BeamSearch単体は `python -m scripts.evaluate.compare_arrangement_models --phase test ...` です。
+検証済みの実装更新だけを互換表で許可し、重み・選定結果・学習時の実行記録は保持します。
+ニューラル方式は再生成・再評価が必要です。保存済みJSONがコード変更だけで自動更新されることはありません。
+
+保存済みの全チェックポイント・全BeamSearch候補をCPUでまとめて再評価する場合は、次を実行します。
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  python -m scripts.evaluate.refresh_test_metrics --root trained_model --scope all --workers 16
+```
+
+ニューラル方式は各モデルの `test_summary.json` / `itest_summary.json` と詳細行を保存し、
+実験直下の `test_all_models.json` / `itest_all_models.json` に全候補をまとめます。
+選定済みモデルについては従来の `test_comparison.json` / `itest_comparison.json` も更新します。
+BeamSearchは全候補と比較用2方式を評価し、各モデルのsummaryと従来の `test/summaries.json` 等を更新します。
+CPU再評価の実行環境は各モデルの `test_evaluation.json` 等に記録し、学習時の実行記録とは分けます。
+`evaluation_cache/` の完了バッチを再利用して中断後に再開できます。
+`trained_model/test_evaluation_status.json` に完了した出力先と、重み未保存などの評価不可理由を記録します。
+全候補のtest結果は事後比較用で、valによる選定結果を変更しません。
+
+### invalidを含む追加評価
+
+`scripts/evaluate/evaluate_including_invalid.py` は、編曲制約に違反した出力も含めて
+難易度のSpearman相関・ラベル距離・発音類似度を測定する研究用CLIです。
+既存の `output/eval-result/*_summary.json` に収録された全モデルを対象にします。
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  python -m scripts.evaluate.evaluate_including_invalid --workers 16
+```
+
+保存先は既定で `output/eval-result`。`test_including_invalid_summary.csv` と
+`itest_including_invalid_summary.csv` に全出力の指標、`*_valid_invalid_comparison.csv` に
+`all_outputs`・`valid_only`・`invalid_only` の比較を保存します。JSONには同じ3集計と
+従来の制約込み成功率も残します。モデル別の詳細行・生成譜面と、実装・入力・重みの
+ハッシュを持つ再開用キャッシュも保存します。従来のCSV・JSONは更新しません。
+
+ニューラル方式は保存済みチェックポイントから同じCPU条件でgreedy再生成し、
+全件について計測時間以外の従来評価との一致を確認します。BeamSearchは保存済みの
+全件validの評価を再利用します。現在のCLIはinvalidを含むBeamSearch保存結果を検出すると
+停止するため、その場合は保存候補からの追加測定を実装してから使用してください。
+
+元の `status` と `valid_rate` は保持します。難易度は制約判定を通さず、同じ境界・前小節で
+算出します。無出力・算出不能は誤差や相関に値を捏造せず、`unmeasurable_n` に記録します。
+`target_success_ignoring_validity` は適格性と独立に全5属性が許容範囲内かを判定し、
+その集計対象の全件を分母にします。算出不能は不成功です。
+発音集合が原譜・出力とも空の場合は従来どおり欠測なので、各類似度の `n` も確認してください。
+
+### 追加実験を含む評価結果の統合
+
+`scripts/evaluate/collect_arrangement_evaluations.py` は追加実験の全チェックポイントについて、
+1回のCPU greedy生成から通常評価とinvalid込み評価を同時に保存します。
+既定では `trained_model/beam-muse_v1` の6モデルを追加し、旧 `output/eval-result` の10モデルを
+詳細行から再集計・検証して再利用し、合計16モデルを `output/eval_result` にまとめます。
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  python -m scripts.evaluate.collect_arrangement_evaluations --workers 16
+```
+
+test／itestごとに `*_summary.csv`（validのみの指標）、`*_including_invalid_summary.csv`（全出力）、
+`*_valid_invalid_comparison.csv`（3集合の内訳）、`*_selected_comparison.csv`（val選定済みモデル）を保存します。
+通常のsummaryでは `n`・status件数・valid_rateは全入力、指標ごとの `*_n` はその指標の測定件数です。
+3集合比較CSVの `n` は各集合の件数です。JSONに完全な集計、モデル別ファイルに生成譜面・詳細行、
+manifestに実装・重み・入力のハッシュと実行環境を記録し、バッチ単位で再開できます。
+原譜・前後文脈・目標・制約が旧実験と一致することも検証します。
+
+同じ候補名でも実験ディレクトリが異なるモデルは別IDで掲載します。単体・複合それぞれの
+val選定を保持し、testによる再選定はしません。追加実験で保存済みのGPU評価は元の場所に残し、
+今回のCPU評価は新しい出力先へ保存します。再構成損失の再計算はこのCLIの対象外です。
+
 ルールベースBeamSearchのステップ1は[編曲ルールの確認資料](BEAMSEARCH_STEP1_REVIEW.md)を参照。
 `src/common/representation.py`は音符・奏法の保持、`src/beamsearch/rules.py`は65編集関数、
 `src/common/safety.py`は骨格保護・累積編集制限、`src/common/examples.py`は固定人工例を担当する。
@@ -98,6 +199,32 @@ python -m scripts.evaluate.report_beam_muse --run output/beam_muse_layout_smoke
 難易度属性v2は[承認済み算出式](ATTRIBUTE_FORMULA_REVIEW.md)と[実装・ラベリング結果](ATTRIBUTE_V2_RESULTS.md)を参照。
 旧式・基準YAML・既存チェックポイントは維持し、新ラベルを別ディレクトリへ生成する。
 
+### tasksの3方式対応
+
+`scripts/tasks.py` は `train.sh` 以外の6タスクから共用する実行先選択CLIです。
+先頭の方式名または `--model` で `musemorphose` / `beamsearch` / `beam_muse` / `all` を指定します。
+旧MIDI生成・旧評価・Bias/Attention解析・旧データ準備は `legacy` として保持し、
+これら4タスクでは方式省略時も以前の引数を受け付けます。
+新モデルの生成入力は既存の1小節JSON形式で、MIDI全曲の旧生成処理とは別です。
+
+| タスク | 新モデルに対する処理 |
+|---|---|
+| `beam_muse.sh` | ニューラルのprepare/select/test、BeamSearchのselect/test。allは探索設定を先に選定 |
+| `generate.sh` | val選定重みと学習時メタデータを照合し、1小節JSONから生成。allは出力を方式別に分離 |
+| `evaluate.sh` | 保存済みモデルをCPUでtest/itest再評価。scopeはselected/all、混在実験でも指定方式だけを対象 |
+| `analysis.sh` | ニューラルの選定・評価・重み統計、BeamSearchの履歴再生・ルール使用状況・比較表 |
+| `data_creator.sh` | 共通のv2ラベル・ペア準備とtrain限定の自己再構成ペア追加。allでもデータを重複作成しない |
+| `plot_loss.sh` | 指定方式の実験ログを再描画。方式省略時はtrained_model全体 |
+
+`scripts/evaluate/evaluate_arrangement_models.py` は実験先を明示して再評価し、
+`refresh_test_metrics.py` のキャッシュ・照合・集約処理を再利用します。
+`scripts/analysis/analyze_arrangement_models.py` は新ニューラルモデルの学習完了記録・
+実装ハッシュ・重みを検証し、JSON/HTMLと構成要素別RMS画像を保存します。
+RMSには保存された浮動小数のバッファも含み、性能指標やAttention強度とは解釈しません。
+BeamSearchには既存の `report_arrangement_comparison.py` を使い、旧解析ツールも削除しません。
+各CLIの `--help` とタスクの `--dry-run` が利用できます。
+用例・既定の実験先は [README](../README.md#新しい3モデルをtasksから実行する) を参照してください。
+
 | スクリプト／モジュール | 用途 |
 |---|---|
 | `src/data/drum_difficulty_v2.py` | 秒単位の打撃負荷、手足非同期、2手の移動DP、LZ反復性 |
@@ -120,9 +247,26 @@ v2クラスはv1と意味が異なるため、既存チェックポイントの�
 ```bash
 python -m src.utils.plot_loss --log trained_model/baseline/log.txt trained_model/variant/log.txt --output output/loss_comparison
 python -m src.utils.plot_valloss --log trained_model/baseline/valloss.txt trained_model/variant/valloss.txt --output output/val_comparison
+python -m scripts.analysis.plot_loss_curves --trained-model-dir trained_model
 python -m scripts.analysis.collect_eval_results --checkpoints baseline variant --eval-dir output/eval --output output/eval/comparison.csv
 bash tasks/evaluate_ensemble.sh output/eval/ensemble trained_model/baseline/params/best_params.pt trained_model/variant/params/best_params.pt
 ```
+
+`scripts/analysis/plot_loss_curves.py`（`bash tasks/plot_loss.sh`）は、各実験の
+`train_loss.log` / `eval_loss.log` を再帰的に読み、`loss_curve.png` を再生成します。
+学習時にも各epochのチェックポイント選定後に同じ形式で自動保存します。
+横軸は共通の学習step、パネルは再構成・KL・合計（再構成 + β × KL）です。
+βは記録値を表示し、補助方策損失は合計に含めません。KL_rawが異なる場合は点線で併記します。
+最良位置は `completed.json` の採用epochと `history.json` のstepから取得し、
+損失最小のepochへ選び直しません。test / itestは採用チェックポイント上の独立した点です。
+旧形式の検証ログは同じstepを平均し、履歴があればトークン加重の再構成損失を優先します。
+集約済み評価ログがある場合はそちらを優先します。
+探索スコアは指標ごとに分けた `beamsearch_scores.png`、符号付き補助方策損失は
+stepごとの寄与の和を `auxiliary_loss_curve.png` に保存します。
+勾配学習のないBeamSearch単体の `loss_curve.png` は学習損失がない旨を表示します。
+再描画は元ログ・設定・重みを変更しません。
+旧チェックポイントの `valloss.txt` は従来どおり `loss_curves.png` に描画します。
+旧CLIの `python -m src.utils.plot_loss_curves` も保持しています。
 
 アンサンブル評価の入力・境界値・評価条件は環境変数 `INPUT_MIDI_DIR`、`DIFFICULTY_BOUNDS`、
 `DIFFICULTY_LABELS` で指定できます。各モデルの語彙・トークン方式の互換性が必要です。
@@ -171,6 +315,22 @@ python tests/verify_tempo_token_in_pkl.py tests/test_token/sample_midis/simple_b
 トークン内容検証で一致率不足を検出しました。診断コマンドは終了コード1を返します。
 テンポ検証は成功しています。今回はモデル・トークナイザー本体の変更は行っていません。
 追加データの外部ダウンロードと、実際の学習済み重みでの分析は未実行です。
+
+## 再構成ペアの追加
+
+`scripts/train/tune_beam_muse.py --config config/musemorphose_candidates.json`で、
+再構成付きペアを使ったMuseMorphose単体の学習・選定・評価も実行できます。
+単体のみの新規キャッシュ作成ではBeamSearch探索を省略します。
+
+`scripts/preprocess/add_pairdata_reconstruction.py`は、既存の編曲ペアを保持したまま、
+trainの元小節を使った自己再構成ペアを別データセットへ追加します。
+val・test・itestは既定では変更しません。詳細は[作成規約と学習方法](PAIRDATA_RECONSTRUCTION.md)を参照してください。
+
+```bash
+python -m scripts.preprocess.add_pairdata_reconstruction --help
+python -m scripts.preprocess.add_pairdata_reconstruction --reconstruction-splits train
+python -m scripts.preprocess.add_pairdata_reconstruction --validate-only
+```
 
 ## 設計資料
 

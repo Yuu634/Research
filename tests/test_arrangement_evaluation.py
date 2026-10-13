@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from src.common.evaluation import EvaluationConfig, evaluate_result, summarize_results
+from src.common.evaluation import EvaluationConfig, evaluate_result, summarize_control_metrics, summarize_results
+from src.common.metrics import onset_similarities
 from src.common.examples import make_bar
 from src.common.inputs import bar_to_payload, prepare_input
 from src.common.representation import to_tokens
@@ -48,6 +49,8 @@ def test_exact_target_retains_skeleton_and_matches_manual_improvement(setup):
     assert metric['note_count_delta'] == -8
     assert metric['direction_rate'] == 1
     assert metric['held_attribute_mae'] == 0
+    assert metric['rhythm_similarity'] == 1
+    assert metric['hihat_similarity'] == pytest.approx(2/3)
 
 
 def test_unchanged_baseline_is_not_reported_as_progress(setup):
@@ -106,6 +109,10 @@ def test_invalid_and_missing_outputs_remain_in_denominator(setup):
     assert summary['failure_adjusted_mae'] == dict(mean=2/3, n=3)
     assert summary['valid_output_means']['mae'] == dict(mean=0, n=1)
     assert summary['reason_counts']['timeout'] == 1
+    assert summary['label_distance'] == dict(mean=0., n=1)
+    assert summary['rhythm_similarity'] == dict(mean=1., n=1)
+    assert summary['hihat_similarity']['n'] == 1
+    assert all(value['n'] == 1 for value in summary['attribute_spearman'].values())
     json.dumps(summary, allow_nan=False)
 
 
@@ -119,6 +126,11 @@ def test_no_outputs_and_empty_dataset_have_no_fake_perfect_means(setup):
     empty = summarize_results([])
     assert empty['joint_success_rate']['value'] is None
     assert empty['source_macro']['joint_success_rate'] == dict(mean=None, n=0)
+    for result in (summary, empty):
+        for key in ('label_distance', 'rhythm_similarity', 'hihat_similarity'):
+            assert result[key] == dict(mean=None, n=0)
+        assert all(value == dict(coefficient=None, n=0, reason='insufficient_samples')
+                   for value in result['attribute_spearman'].values())
     json.dumps(empty, allow_nan=False)
 
 
@@ -218,3 +230,69 @@ def test_invalid_evaluation_arguments(setup, kwargs):
 def test_invalid_thresholds_rejected(setup, config):
     with pytest.raises(ValueError):
         evaluate(setup, config=config)
+
+
+def test_onset_similarity_separates_hihat_and_keeps_instrument_identity():
+    original = make_bar([(0, 'kick'), (24, 'snare'), (0, 'hh_closed'), (12, 'hh_open'), (24, 'hh_pedal')])
+    candidate = make_bar([(0, 'snare'), (24, 'snare', 'Ghost'), (0, 'hh_open'), (12, 'hh_closed'), (48, 'hh_pedal')])
+    scores = onset_similarities(original, candidate)
+    assert scores['rhythm_similarity'] == .5
+    assert scores['hihat_similarity'] == pytest.approx(2/3)
+    assert onset_similarities(original, original) == dict(rhythm_similarity=1., hihat_similarity=1.)
+
+
+def test_onset_similarity_handles_empty_groups_added_notes_and_duplicate_hihat_positions():
+    empty = make_bar([])
+    hihat = make_bar([(0, 'hh_closed'), (0, 'hh_pedal')])
+    same_position = make_bar([(0, 'hh_open')])
+    assert onset_similarities(hihat, same_position) == dict(rhythm_similarity=None, hihat_similarity=1.)
+    assert onset_similarities(empty, empty) == dict(rhythm_similarity=None, hihat_similarity=None)
+    assert onset_similarities(empty, hihat) == dict(rhythm_similarity=None, hihat_similarity=0.)
+    assert onset_similarities(hihat, empty) == dict(rhythm_similarity=None, hihat_similarity=0.)
+    assert onset_similarities(make_bar([(0, 'kick')]), make_bar([(0, 'kick'), (24, 'snare')])) == {
+        'rhythm_similarity': pytest.approx(2/3), 'hihat_similarity': None}
+
+
+def control_rows(targets, generated):
+    return [dict(status='valid', target={key: target/7 for key in DIFFICULTY_KEYS},
+                 metrics=dict(difficulty=dict(classes={key: output for key in DIFFICULTY_KEYS})))
+            for target, output in zip(targets, generated)]
+
+
+@pytest.mark.parametrize('targets,generated,expected', [
+    ([1, 3, 5], [2, 4, 6], 1.),
+    ([1, 3, 5], [6, 4, 2], -1.),
+    ([1, 1, 3, 5], [2, 4, 4, 6], 5/6),
+])
+def test_attribute_spearman_uses_paired_samples_and_average_ranks_for_ties(targets, generated, expected):
+    result = summarize_control_metrics(control_rows(targets, generated))
+    for value in result['attribute_spearman'].values():
+        assert value['coefficient'] == pytest.approx(expected)
+        assert value['n'] == len(targets) and value['reason'] is None
+    assert result['label_distance']['mean'] == pytest.approx(
+        sum(abs(a-b) for a, b in zip(targets, generated))/len(targets))
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize('targets,generated,reason', [
+    ([1], [2], 'insufficient_samples'),
+    ([1, 1], [2, 3], 'constant_target'),
+    ([1, 2], [3, 3], 'constant_generated'),
+])
+def test_undefined_spearman_is_null_with_reason(targets, generated, reason):
+    result = summarize_control_metrics(control_rows(targets, generated))
+    assert all(value == dict(coefficient=None, n=len(targets), reason=reason)
+               for value in result['attribute_spearman'].values())
+    json.dumps(result, allow_nan=False)
+
+
+def test_label_distance_averages_all_attributes_without_rounding_continuous_targets():
+    rows = control_rows([1.5, 3.5], [2, 4])
+    first = DIFFICULTY_KEYS[0]
+    for row in rows:
+        row['target'][first] = row['metrics']['difficulty']['classes'][first]/7
+    result = summarize_control_metrics(rows)
+    assert result['attribute_label_distance'][first] == dict(mean=0., n=2)
+    for key in DIFFICULTY_KEYS[1:]:
+        assert result['attribute_label_distance'][key] == dict(mean=.5, n=2)
+    assert result['label_distance'] == dict(mean=.4, n=2)

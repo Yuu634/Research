@@ -93,6 +93,52 @@ python -m scripts.analysis.collect_eval_results \
 評価条件は [`config/evaluation_difficulty_labels.json`](config/evaluation_difficulty_labels.json) にあります。
 評価・生成スクリプトの追加引数で入力、出力、モデル、難易度境界値を上書きできます。
 
+## 新しい3モデルをtasksから実行する
+
+`train.sh` 以外のタスクは、先頭に `musemorphose`（単体）、`beamsearch`（単体）、
+`beam_muse`（複合）、`all`（3方式）を指定できます。`--model` での指定も可能です。
+既定の実験先は順に `trained_model/musemorphose_v1`、`trained_model/beamsearch_v1`、
+`trained_model/beam-muse_v1`。単一方式は `--run`、3方式は `--root` で変更できます。
+
+```bash
+# 方式を指定して学習／探索設定の選定。BeamSearchには勾配学習がない。
+bash tasks/beam_muse.sh musemorphose --phase all --device cuda:0
+bash tasks/beam_muse.sh beamsearch --phase all
+bash tasks/beam_muse.sh beam_muse --phase all --device cuda:0
+
+# 新しい3方式の実験。BeamSearch選定→単体学習→複合学習の順で実行。
+bash tasks/beam_muse.sh all --root output/new_three_model_run --phase all
+
+# v2ラベル付き譜面から共通pairdataを作成（allでも作成は1回）。
+bash tasks/data_creator.sh all --stage pairs
+
+# 新モデルは文脈・難易度目標・保護情報を持つ1小節JSONを入力する。
+python -m scripts.evaluate.review_arrangement_inputs --examples
+bash tasks/generate.sh all output/beamsearch_step3/absolute_request.json output/three_model_generation
+
+# 保存済みのval選定モデルをCPUでtest/itest評価。再学習・再選定はしない。
+bash tasks/evaluate.sh all --scope selected --workers 8
+bash tasks/analysis.sh all
+bash tasks/plot_loss.sh all
+```
+
+`--scope all` で指定方式の全候補を評価・解析できます。複合実験に含まれる単体候補は、
+`--model musemorphose --run trained_model/beam-muse_v1` で指定します。
+生成は選定記録から重みを選び、保存済みキャッシュから語彙・境界・BeamSearch設定を取得します。
+`--checkpoint` で候補を直接指定する場合も、学習完了記録の方式とハッシュを照合します。
+`all` の生成結果は方式ごとの出力ディレクトリに分けます。
+
+新ニューラルモデルの解析は選定結果・評価・構成要素別の保存重み統計、
+BeamSearchの解析は探索設定・ルール使用状況・履歴再生による評価値の検証です。
+旧基準モデルのBias・Attention解析は `bash tasks/analysis.sh legacy MODEL_DIR` で実行できます。
+以前のMIDI生成、評価、データ準備の引数は維持し、方式名を省略すると旧タスクの動作になります。
+`beam_muse.sh` は方式省略時に複合実験、`plot_loss.sh` は全実験を対象にします。
+
+データ準備の `--stage all` は、収集済み原データのトークン化・検証、v2ラベル付与、
+ペア作成、trainのみの自己再構成ペア追加を順に実行します。原データのダウンロードは別工程です。
+`--stage validate` は既存ペアを検証し、モデル重みには触れません。
+各タスクの `--help` で引数を確認でき、`--dry-run` で実行コマンドだけを表示できます。
+
 ## 構成と整理方針
 
 - `src/`: モデル、トークナイザー、データローダー、難易度計算、MIDI 変換。

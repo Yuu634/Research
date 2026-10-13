@@ -3,9 +3,10 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 import math
 from statistics import mean, median
+from scipy.stats import spearmanr
 
 from src.common.difficulty import DIFFICULTY_KEYS
-from src.common.metrics import musical_edit_distance, skeleton_similarity
+from src.common.metrics import musical_edit_distance, onset_similarities, skeleton_similarity
 
 EPSILON = 1e-12
 # 探索モデルの重みを変更しても、この評価用の成分重みは変えない。
@@ -105,6 +106,7 @@ def evaluate_result(prepared, candidate, model, *, case_id, source_id,
         skeleton_effective_weights=effective, skeleton_evidence=evidence,
         edit_distance=edit, changed=edit > EPSILON,
         note_count_delta=len(candidate.notes)-len(prepared.original.notes),
+        **onset_similarities(prepared.original, candidate),
     )
     row.update(status='valid', reasons=[], metrics=metrics, target_success=target_success,
                joint_success=joint_success, failure_adjusted_mae=mae)
@@ -120,6 +122,36 @@ def _rate(values):
     values = list(values)
     count = sum(bool(value) for value in values)
     return dict(value=count/len(values) if values else None, numerator=count, denominator=len(values))
+
+
+def _spearman(targets, generated):
+    """定数列・少数件は相関を捏造せず、理由付きの欠測値として返す。"""
+    n = len(targets)
+    reason = ('insufficient_samples' if n < 2 else
+              'constant_target' if len(set(targets)) < 2 else
+              'constant_generated' if len(set(generated)) < 2 else None)
+    coefficient = None if reason else float(spearmanr(targets, generated).statistic)
+    return dict(coefficient=coefficient, n=n, reason=reason)
+
+
+def summarize_control_metrics(rows):
+    """適格出力について属性制御と原譜保持を集計する。既存の選定指標は変更しない。
+
+    ラベル距離はabs(7 * 正規化目標 - 生成ラベル)。連続目標も丸めない。
+    類似度は小節ごとのF1を平均し、旧結果の未記録値・両方空は除外する。
+    """
+    valid = [row for row in rows if row['status'] == 'valid']
+    distances = {key: [abs(7 * row['target'][key] - row['metrics']['difficulty']['classes'][key])
+                       for row in valid] for key in DIFFICULTY_KEYS}
+    return dict(
+        attribute_spearman={key: _spearman(
+            [row['target'][key] for row in valid],
+            [row['metrics']['difficulty']['classes'][key] for row in valid]) for key in DIFFICULTY_KEYS},
+        attribute_label_distance={key: _average(values) for key, values in distances.items()},
+        label_distance=_average(mean(values) for values in zip(*distances.values())),
+        rhythm_similarity=_average(row['metrics'].get('rhythm_similarity') for row in valid),
+        hihat_similarity=_average(row['metrics'].get('hihat_similarity') for row in valid),
+    )
 
 
 def summarize_results(rows):
@@ -175,4 +207,5 @@ def summarize_results(rows):
         source_macro={key: _average(row[key] for row in source_rows) for key in (
             'valid_rate', 'joint_success_rate', 'failure_adjusted_mae', 'baseline_mae', 'baseline_joint_success_rate')},
         sources=source_rows,
+        **summarize_control_metrics(rows),
     )

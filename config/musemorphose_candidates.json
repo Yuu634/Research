@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "data": {
+    "pairdata": "data/processed/drum_pairdata_v1+reconst",
+    "beam_model": "config/beamsearch_selected.json"
+  },
+  "model": {
+    "d_model": 512,
+    "d_latent": 512,
+    "n_head": 8,
+    "enc_layers": 6,
+    "dec_layers": 6,
+    "d_ff": 2048,
+    "d_condition": 128,
+    "dropout": 0.1,
+    "cond_mode": "in-attn",
+    "difficulty_mode": "absolute",
+    "use_skeleton": false,
+    "max_tokens": 512
+  },
+  "loss": {
+    "beta": 0.01,
+    "free_bits": 0.0,
+    "difficulty": 1.0,
+    "skeleton": 0.5,
+    "context": 0.2,
+    "edit": 0.1,
+    "validity": 1.0
+  },
+  "training": {
+    "epochs": 10,
+    "batch_size": 8,
+    "learning_rate": 0.0002,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "risk_interval": 10,
+    "risk_examples": 1,
+    "grad_clip": 1.0
+  },
+  "trials": [
+    {
+      "name": "muse_absolute_lr2",
+      "variant": "musemorphose",
+      "model": {
+        "use_skeleton": false,
+        "difficulty_mode": "absolute"
+      }
+    },
+    {
+      "name": "muse_absolute_lr1",
+      "variant": "musemorphose",
+      "model": {
+        "use_skeleton": false,
+        "difficulty_mode": "absolute"
+      },
+      "training": {
+        "learning_rate": 0.0001
+      }
+    }
+  ]
+}

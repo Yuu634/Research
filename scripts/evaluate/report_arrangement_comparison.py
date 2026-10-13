@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from data.pairdata.io import file_hash, read_pickle, write_json
-from scripts.evaluate.compare_arrangement_models import selection_key
+from scripts.evaluate.compare_arrangement_models import read_evaluation_batch, selection_key
 from scripts.evaluate.review_arrangement_rules import midi, svg
 from src.common.evaluation import evaluate_result
 from src.beamsearch.beam_search import SearchConfig
@@ -48,6 +48,7 @@ def report(args):
         if file_hash(directory/'inputs.pkl.gz') != manifest['inputs_sha256']:
             raise ValueError('保存入力が変更された')
         inputs = {item['case_id']: item for item in read_pickle(directory/'inputs.pkl.gz')}
+        prepared_inputs = {key: item['prepared'] for key, item in inputs.items()}
         manifests[split] = {key: manifest[key] for key in ('considered', 'accepted', 'excluded', 'exclusion_reasons')}
         count = 0
         usage, stops = Counter(), Counter()
@@ -55,7 +56,8 @@ def report(args):
             receipt = json.loads(path.with_suffix('.json').read_text())
             if file_hash(path) != receipt['sha256']:
                 raise ValueError('評価バッチが変更された')
-            for row in read_pickle(path):
+            batch_rows, _ = read_evaluation_batch(path, prepared_inputs)
+            for row in batch_rows:
                 prepared = inputs[row['case_id']]['prepared']
                 bar = prepared.original.with_notes(prepared.original.notes)
                 for action in row['history']:

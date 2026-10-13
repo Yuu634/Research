@@ -1,5 +1,8 @@
 # 擬似編曲前後ペアの作成
 
+trainに自己再構成ペアを追加する場合は、[再構成データの作成規約とCLI](../../docs/PAIRDATA_RECONSTRUCTION.md)を参照する。
+`reconstruction.py`が別の出力先へ追加し、元pairdataと評価用シャードを保持する。
+
 ユーザー提示の「擬似編曲前後ペア作成アルゴリズム」の8段階を実装した。
 難易度ベクトルはユーザー指定により、[承認済みv2](../../docs/ATTRIBUTE_FORMULA_REVIEW.md)の
 `s_tech, s_indep, s_hand, s_foot, s_move` を使用する。

@@ -1,5 +1,9 @@
 {
   "schema_version": 1,
+  "data": {
+    "pairdata": "data/processed/drum_pairdata_v1+reconst",
+    "beam_model": "config/beamsearch_selected.json"
+  },
   "model": {
     "d_model": 512, "d_latent": 512, "n_head": 8,
     "enc_layers": 6, "dec_layers": 6, "d_ff": 2048,

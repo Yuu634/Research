@@ -4,6 +4,27 @@ import numpy as np
 from src.common.representation import Bar
 
 SKELETON_KEYS = ('kick', 'snare', 'accent', 'fill')
+HIHAT_INSTRUMENTS = frozenset(('hh_closed', 'hh_open', 'hh_pedal'))
+
+
+def onset_similarities(original: Bar, candidate: Bar):
+    """原譜との発音F1。非HHは楽器と位置、HH3種は位置だけを比較する。
+
+    96位置の完全一致で比較し、強弱・奏法・音符IDは使用しない。
+    両方空ならNone、片方だけ空なら0。同一イベントの重複は数えない。
+    """
+    def events(bar):
+        rhythm = {(n.instrument, n.position) for n in bar.notes if n.instrument not in HIHAT_INSTRUMENTS}
+        hihat = {n.position for n in bar.notes if n.instrument in HIHAT_INSTRUMENTS}
+        return rhythm, hihat
+
+    def f1(a, b):
+        return 2 * len(a & b) / (len(a) + len(b)) if a or b else None
+
+    original_rhythm, original_hihat = events(original)
+    candidate_rhythm, candidate_hihat = events(candidate)
+    return dict(rhythm_similarity=f1(original_rhythm, candidate_rhythm),
+                hihat_similarity=f1(original_hihat, candidate_hihat))
 
 
 def _musical_key(note):
